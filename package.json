@@ -1,0 +1,28 @@
+{
+  "name": "ariel",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "workspaces": [
+    "apps/cli",
+    "packages/core",
+    "packages/providers",
+    "packages/local-host"
+  ],
+  "scripts": {
+    "typecheck": "bun run --filter '@ariel/*' typecheck && tsc --project tsconfig.json",
+    "lint": "biome lint --error-on-warnings .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "build": "bun run --filter '@ariel/*' build"
+  },
+  "devDependencies": {
+    "@ariel/cli": "workspace:*",
+    "@ariel/core": "workspace:*",
+    "@ariel/local-host": "workspace:*",
+    "@ariel/providers": "workspace:*",
+    "@biomejs/biome": "2.5.14",
+    "@types/bun": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}

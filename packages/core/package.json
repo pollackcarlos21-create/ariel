@@ -1,0 +1,13 @@
+{
+  "name": "@ariel/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "build": "bun build ./src/index.ts --target browser --format esm --outdir dist"
+  }
+}
