@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "types": ["bun"] },
+  "compilerOptions": { "types": ["bun"], "resolveJsonModule": true },
   "include": ["tests/**/*.ts"]
 }

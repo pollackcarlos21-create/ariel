@@ -6,12 +6,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "bin": {
+    "ariel": "./src/bin.ts"
+  },
   "scripts": {
     "typecheck": "tsc --project tsconfig.json",
-    "build": "bun build ./src/index.ts --target bun --format esm --outdir dist"
-  },
-  "dependencies": {
-    "@ariel/core": "workspace:*",
-    "@ariel/local-host": "workspace:*"
+    "build": "bun build ./src/index.ts ./src/bin.ts --target bun --format esm --outdir dist"
   }
 }

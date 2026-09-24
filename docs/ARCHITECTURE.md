@@ -9,7 +9,7 @@
 | `@ariel/core` | `packages/core` | 可嵌入、宿主和前端无关的核心 | 空导出，无公共业务 API |
 | `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | 仅验证 core 公共入口解析 |
 | `@ariel/local-host` | `packages/local-host` | 本地宿主 adapter 与 composition root | 仅验证 core、providers 公共入口解析 |
-| `@ariel/cli` | `apps/cli` | 薄 CLI frontend | 仅验证 core、local-host 公共入口解析，无命令 |
+| `@ariel/cli` | `apps/cli` | 薄 CLI frontend | 可执行入口及可测试的 help、version、默认启动和未知参数处理 |
 
 允许的直接依赖如下，箭头表示“左侧依赖右侧”，并不表示 core 依赖宿主：
 
@@ -22,7 +22,23 @@
 
 禁止其他跨 workspace 依赖和循环依赖。不得增加 shared、common、utils 通用包。内部依赖版本必须为 `workspace:*`。
 
-所有包均为 private，只有 `.` 公共入口，指向 `src/index.ts`，供 Bun 和 TypeScript 在仓库内解析。没有通配 exports、源码路径别名、发布契约或可执行 bin。每包的 `dist/index.js` 用于验证 ESM 构建，不是对外发布产物。
+所有包均为 private，只有 `.` 公共入口，指向 `src/index.ts`，供 Bun 和 TypeScript 在仓库内解析。没有通配 exports、源码路径别名或发布契约。CLI 另有 `bin.ariel` 指向 `src/bin.ts`；构建输出 CLI 的 `dist/index.js` 和 `dist/bin.js`，其他包仍输出 `dist/index.js`。这些是本地 ESM 构建产物，不是对外发布产物。
+
+### CLI 当前结构
+
+```text
+src/bin.ts（Bun executable entrypoint）
+  -> src/index.ts：runCli(args)
+  -> { exitCode, stdout, stderr }
+```
+
+`runCli` 只解析参数并生成结果，不读取 process.argv、不写入进程输出流、不退出进程。公共类型 `CliResult` 仅表达当前 CLI 的输出和退出码。`src/bin.ts` 集中读取 process.argv、写入 process.stdout/process.stderr 并设置 process.exitCode；入口带有 Bun shebang。
+
+支持默认启动、`--help` 和 `--version`。未知参数优先报错；只有已知选项时，help 优先于 version，重复选项不改变结果。默认启动仅说明尚未实现交互式 Agent，不读取 stdin、不检查仓库、不创建会话。
+
+版本唯一来源为 CLI 自己的 package.json，通过静态 JSON import 读取，build 将版本打包进产物。只在 CLI 和根测试 tsconfig 启用 `resolveJsonModule`，不修改 core 配置。architecture guard 允许 `@ariel/cli` import 自身 workspace 根目录的 package.json；当前 CLI 实现仅使用 version 字段。此 gate 限制目标路径，不限制导入字段；其他离开 src 的相对导入仍被拒绝，包括 CLI 的 tsconfig、仓库根配置和其他 workspace 的 manifest。core 导入自身 package.json 也不属于该例外。
+
+当前 `@ariel/cli` 尚未依赖其他 Ariel workspace，没有 runtime dependency。未来只有出现真实业务调用时才加入对应 dependency；上文已批准的允许依赖方向保持不变。没有引入 CLI framework、AgentRuntime、ArielService 或宿主业务接口。
 
 ### core 独立性
 
@@ -43,7 +59,7 @@ core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不�
 - local-host 是 composition root，负责装配核心和具体 adapter，承载本地宿主实现。
 - CLI 负责入口和用户交互，将业务委托给核心及 local-host，不承载核心逻辑。
 
-这里只记录批准的职责，不定义尚不存在的接口、运行时或装配 API。
+以上业务运行架构仍为批准方向，当前 CLI 命令没有实现核心运行时或装配 API。
 
 ## DEFERRED：本 milestone 明确不实现
 

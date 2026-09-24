@@ -92,7 +92,14 @@ function sourceIssues(
 
   function checkImport(specifier: string): void {
     if (specifier.startsWith(".")) {
-      const path = relative(sourceRoot, resolve(dirname(file), specifier));
+      const target = resolve(dirname(file), specifier);
+      // Only the CLI's own package.json is exempt; imported fields are not restricted.
+      if (
+        name === "@ariel/cli" &&
+        target === resolve(sourceRoot, "../package.json")
+      )
+        return;
+      const path = relative(sourceRoot, target);
       if (path === ".." || path.startsWith("../") || isAbsolute(path)) {
         issues.push(
           `Import leaves workspace src; use a public package export: ${specifier}`,
@@ -263,6 +270,10 @@ describe("architecture guard regression cases", () => {
     ["@ariel/local-host", 'import "@ariel/cli";'],
     ["@ariel/cli", 'import "@ariel/providers";'],
     ["@ariel/cli", 'import "@ariel/core/src/index.ts";'],
+    ["@ariel/cli", 'import "../tsconfig.json";'],
+    ["@ariel/cli", 'import "../../../package.json";'],
+    ["@ariel/cli", 'import "../../../packages/core/package.json";'],
+    ["@ariel/core", 'import "../package.json";'],
     ["@ariel/providers", 'import "../../core/src/index.ts";'],
     ["@ariel/providers", 'const core = require("@ariel/core");'],
     ["@ariel/providers", 'import core = require("@ariel/core");'],
@@ -290,6 +301,17 @@ describe("architecture guard regression cases", () => {
     expect(
       dependencyIssues("@ariel/core", { "provider-sdk": "1.0.0" }),
     ).not.toEqual([]);
+  });
+
+  test("allows CLI to import its own package.json outside src", () => {
+    expect(
+      sourceIssues(
+        "@ariel/cli",
+        resolve(root, "apps/cli/src/index.ts"),
+        'import { version } from "../package.json";',
+        {},
+      ),
+    ).toEqual([]);
   });
 
   test("detects indirect cycles and self-dependencies", () => {

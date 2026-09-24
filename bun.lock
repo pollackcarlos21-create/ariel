@@ -17,9 +17,8 @@
     "apps/cli": {
       "name": "@ariel/cli",
       "version": "0.0.0",
-      "dependencies": {
-        "@ariel/core": "workspace:*",
-        "@ariel/local-host": "workspace:*",
+      "bin": {
+        "ariel": "./src/bin.ts",
       },
     },
     "packages/core": {
