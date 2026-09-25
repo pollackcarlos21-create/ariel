@@ -20,6 +20,9 @@
       "bin": {
         "ariel": "./src/bin.ts",
       },
+      "dependencies": {
+        "@ariel/core": "workspace:*",
+      },
     },
     "packages/core": {
       "name": "@ariel/core",

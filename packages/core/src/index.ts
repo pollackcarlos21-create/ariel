@@ -1,2 +1,7 @@
-// Milestone 001: no public agent API exists yet.
-export {};
+export interface ApplicationStatus {
+  readonly agentExecution: "not-implemented";
+}
+
+export function getApplicationStatus(): ApplicationStatus {
+  return { agentExecution: "not-implemented" };
+}

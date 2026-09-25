@@ -12,5 +12,8 @@
   "scripts": {
     "typecheck": "tsc --project tsconfig.json",
     "build": "bun build ./src/index.ts ./src/bin.ts --target bun --format esm --outdir dist"
+  },
+  "dependencies": {
+    "@ariel/core": "workspace:*"
   }
 }

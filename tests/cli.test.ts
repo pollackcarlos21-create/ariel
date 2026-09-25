@@ -28,13 +28,13 @@ describe("CLI behavior without a process or terminal", () => {
     });
   });
 
-  test("default invocation reports the current status and exits normally", () => {
-    const result = runCli([]);
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Ariel CLI 已启动");
-    expect(result.stdout).toContain("尚未实现交互式 Agent");
-    expect(result.stdout).toContain("ariel --help");
+  test("default invocation presents the core application status and exits normally", () => {
+    expect(runCli([])).toEqual({
+      exitCode: 0,
+      stdout:
+        "Ariel CLI 已启动。当前尚未实现交互式 Agent。\n使用 ariel --help 查看帮助。\n",
+      stderr: "",
+    });
   });
 
   test.each([

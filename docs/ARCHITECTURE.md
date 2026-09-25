@@ -6,10 +6,10 @@
 
 | Workspace | 路径 | 已批准的职责 | 当前实现 |
 | --- | --- | --- | --- |
-| `@ariel/core` | `packages/core` | 可嵌入、宿主和前端无关的核心 | 空导出，无公共业务 API |
+| `@ariel/core` | `packages/core` | 可嵌入、宿主和前端无关的核心 | `ApplicationStatus` 与具名 application query `getApplicationStatus()` |
 | `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | 仅验证 core 公共入口解析 |
 | `@ariel/local-host` | `packages/local-host` | 本地宿主 adapter 与 composition root | 仅验证 core、providers 公共入口解析 |
-| `@ariel/cli` | `apps/cli` | 薄 CLI frontend | 可执行入口及可测试的 help、version、默认启动和未知参数处理 |
+| `@ariel/cli` | `apps/cli` | 薄 CLI frontend | 默认启动查询 core 状态并生成提示；保留 help、version 和未知参数处理 |
 
 允许的直接依赖如下，箭头表示“左侧依赖右侧”，并不表示 core 依赖宿主：
 
@@ -29,16 +29,36 @@
 ```text
 src/bin.ts（Bun executable entrypoint）
   -> src/index.ts：runCli(args)
-  -> { exitCode, stdout, stderr }
+  -> 默认启动：@ariel/core.getApplicationStatus()
+  -> ApplicationStatus
+  -> CLI formatting
+  -> CliResult：{ exitCode, stdout, stderr }
+  -> src/bin.ts：process stdout/stderr/exitCode
 ```
 
-`runCli` 只解析参数并生成结果，不读取 process.argv、不写入进程输出流、不退出进程。公共类型 `CliResult` 仅表达当前 CLI 的输出和退出码。`src/bin.ts` 集中读取 process.argv、写入 process.stdout/process.stderr 并设置 process.exitCode；入口带有 Bun shebang。
+`runCli` 解析参数，仅在默认启动路径调用 core application query，并根据返回的 `agentExecution` 生成中文结果；help、version 和未知参数路径不调用该 query。它不读取 process.argv、不写入进程输出流、不退出进程。公共类型 `CliResult` 仅表达当前 CLI 的输出和退出码。`src/bin.ts` 集中读取 process.argv、写入 process.stdout/process.stderr 并设置 process.exitCode；入口带有 Bun shebang。
 
 支持默认启动、`--help` 和 `--version`。未知参数优先报错；只有已知选项时，help 优先于 version，重复选项不改变结果。默认启动仅说明尚未实现交互式 Agent，不读取 stdin、不检查仓库、不创建会话。
 
 版本唯一来源为 CLI 自己的 package.json，通过静态 JSON import 读取，build 将版本打包进产物。只在 CLI 和根测试 tsconfig 启用 `resolveJsonModule`，不修改 core 配置。architecture guard 允许 `@ariel/cli` import 自身 workspace 根目录的 package.json；当前 CLI 实现仅使用 version 字段。此 gate 限制目标路径，不限制导入字段；其他离开 src 的相对导入仍被拒绝，包括 CLI 的 tsconfig、仓库根配置和其他 workspace 的 manifest。core 导入自身 package.json 也不属于该例外。
 
-当前 `@ariel/cli` 尚未依赖其他 Ariel workspace，没有 runtime dependency。未来只有出现真实业务调用时才加入对应 dependency；上文已批准的允许依赖方向保持不变。没有引入 CLI framework、AgentRuntime、ArielService 或宿主业务接口。
+当前 `@ariel/cli` 只声明 `@ariel/core: workspace:*` 这一 runtime dependency，并通过 core 公共入口调用 application query。local-host 和 providers 未参与 CLI execution。只有出现真实业务调用时才加入对应 dependency；上文已批准的允许依赖方向保持不变。没有引入 CLI framework、AgentRuntime、ArielService 或宿主业务接口。
+
+### 最小 application boundary
+
+core 公共入口直接导出：
+
+```ts
+export interface ApplicationStatus {
+  readonly agentExecution: "not-implemented";
+}
+
+export function getApplicationStatus(): ApplicationStatus;
+```
+
+`getApplicationStatus()` 返回 `{ agentExecution: "not-implemented" }`，只表达当前版本尚未实现 Agent execution 这一 application fact；不表示 provider 是否可用、配置是否有效、host 是否健康、session 是否存在或 runtime 是否已启动。CLI 消费该字段并负责中文用户文字；core 不返回 help、stdout、stderr、exit code 或 CLI version。
+
+该 query 同步、无参数、无副作用，不读取 filesystem、process/env、cwd、time，不访问 network，不使用 Bun 或 Node runtime API，不依赖第三方包或其他 workspace。不创建实例、后台任务、Promise 或生命周期。它不是 generic capabilities registry；没有 Application service object、Runtime facade 或 command/query dispatcher。决策见 [ADR-005](decisions/ADR-005-minimal-application-boundary.md)。
 
 ### core 独立性
 
@@ -59,7 +79,7 @@ core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不�
 - local-host 是 composition root，负责装配核心和具体 adapter，承载本地宿主实现。
 - CLI 负责入口和用户交互，将业务委托给核心及 local-host，不承载核心逻辑。
 
-以上业务运行架构仍为批准方向，当前 CLI 命令没有实现核心运行时或装配 API。
+当前已实现 CLI 直接调用 core application query；以上涉及 adapter 和资源装配的运行架构仍为批准方向，尚无核心运行时或装配 API。出现真实 adapter/resource 需求后仍由 local-host 承担 composition root。
 
 ## DEFERRED：本 milestone 明确不实现
 

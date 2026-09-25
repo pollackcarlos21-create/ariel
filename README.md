@@ -1,8 +1,8 @@
 # Ariel
 
-Ariel 是一个从第一性原理构建 autonomous coding agent 的开源项目，目前处于 **Milestone 002 — CLI Foundation** 阶段。
+Ariel 是一个从第一性原理构建 autonomous coding agent 的开源项目。
 
-当前具备 TypeScript + Bun + ESM 工程基础、四个 workspace、严格类型检查、lint、自动格式化、测试、架构边界检查、构建命令及 GitHub Actions CI 配置，以及可从终端启动的最小 CLI。
+当前具备 TypeScript + Bun + ESM 工程基础、四个 workspace、严格类型检查、lint、自动格式化、测试、架构边界检查、构建命令及 GitHub Actions CI 配置，以及可从终端启动的最小 CLI。默认启动通过 `@ariel/core.getApplicationStatus()` 查询当前 Agent execution 尚未实现这一 application fact，再由 CLI 生成中文提示。
 
 ## 运行 CLI
 
@@ -26,7 +26,9 @@ bun run ariel
 PATH="$PWD/node_modules/.bin:$PATH" ariel --help
 ```
 
-当前没有交互式 Agent、model provider、会话或 agent loop。core、providers 和 local-host 仍为占位模块；包均为 private，未发布。
+core 的公共 application API 为无参数、同步、无副作用的 `getApplicationStatus(): ApplicationStatus`，返回 `{ agentExecution: "not-implemented" }`，不需要宿主、provider 或 runtime。该结果不表示配置、宿主或 provider 的健康状态。
+
+当前没有交互式 Agent、model provider、会话或 agent loop。providers 和 local-host 仍为占位模块，未参与 CLI execution；包均为 private，未发布。
 
 - [开发与验证](docs/DEVELOPMENT.md)
 - [当前架构与边界](docs/ARCHITECTURE.md)

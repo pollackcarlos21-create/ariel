@@ -14,6 +14,7 @@
 
 ```sh
 bun install
+bun install --frozen-lockfile
 bun run typecheck
 bun run lint
 bun run format
@@ -29,8 +30,8 @@ git diff
 - `bun run lint`：Biome recommended lint，并将 warning 视为失败，显式禁止 `any`。
 - `bun run format`：Biome 自动格式化其支持的源码和配置文件；Markdown、YAML 遵循 `.editorconfig` 并人工检查。
 - `bun run format:check`：只检查格式，不改文件。
-- `bun test`：Bun 原生测试，检查公共包入口解析、exports 封装、依赖图、源码架构边界及 CLI 行为，包含违规反例。CLI 主逻辑直接调用测试；少量入口测试从临时目录启动 Bun 子进程，检查参数、输出流和退出码，无需真实 terminal。
-- `bun run build`：逐包用 Bun 输出 ESM。CLI 输出 `dist/index.js` 和 `dist/bin.js`；其他包输出占位 `dist/index.js`，空 bundle 属正常结果。build 不进行 TypeScript 类型检查，必须另外执行 typecheck。
+- `bun test`：Bun 原生测试，检查公共包入口解析、exports 封装、依赖图、源码架构边界、core application contract 及 CLI 行为，包含违规反例。core query 经公共入口独立调用测试，无需 CLI、local-host、provider 或 process 配置。CLI 主逻辑直接调用测试；少量入口测试从临时目录启动 Bun 子进程，检查参数、输出流和退出码，无需真实 terminal。
+- `bun run build`：逐包用 Bun 输出 ESM。CLI 输出 `dist/index.js` 和 `dist/bin.js`；core 的 `dist/index.js` 包含 application query，继续使用 browser target；providers 和 local-host 仍输出占位 `dist/index.js`，空 bundle 属正常结果。build 不进行 TypeScript 类型检查，必须另外执行 typecheck。
 
 Biome 同时提供 lint 与格式化，减少独立工具和配置；Bun 自带测试及 bundler，因此不引入额外测试框架或构建编排器。架构检查复用已安装的 TypeScript parser，没有新增架构框架依赖。
 
@@ -66,7 +67,9 @@ bun apps/cli/dist/bin.js --unknown
 
 版本只在 CLI package.json 中维护；JSON import 会将其纳入构建产物，修改版本后需重新 build。CLI 和根测试 tsconfig 的 `resolveJsonModule` 用于检查这个 JSON import，未改变基础或 core 配置。
 
-修改 workspace 的 bin 时应同步 Bun 锁文件的对应元数据。Bun 1.4.2 沿用旧锁文件时可能不自动登记新增 bin；本次锁文件已包含 CLI bin，冻结锁文件安装可生成本地可执行入口，依赖版本未改变。
+修改 workspace 的 bin 或 dependencies 时应同步 Bun 锁文件的对应元数据，并通过 `bun install --frozen-lockfile` 检查 manifest 与锁文件一致。Bun 1.4.2 沿用旧锁文件时可能不自动登记新增 bin；应检查锁文件中的 bin 元数据与安装后的本地 executable。
+
+默认启动路径通过 `@ariel/core` 公共入口调用 `getApplicationStatus()`，读取结构化 `agentExecution` 并生成中文提示。core 维护 application fact，CLI 维护用户文字与 `CliResult`；help、version 和未知参数不需要 application query。新增 application contract 应直接测试其公共入口与精确语义，再通过 CLI 行为测试检查 presentation，无需引入 service object、dispatcher 或 mocking framework。
 
 ## 包解析与边界
 

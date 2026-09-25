@@ -1,3 +1,4 @@
+import { getApplicationStatus } from "@ariel/core";
 import { version } from "../package.json";
 
 export interface CliResult {
@@ -34,10 +35,14 @@ export function runCli(args: readonly string[]): CliResult {
     return { exitCode: 0, stdout: `${version}\n`, stderr: "" };
   }
 
-  return {
-    exitCode: 0,
-    stdout:
-      "Ariel CLI 已启动。当前尚未实现交互式 Agent。\n使用 ariel --help 查看帮助。\n",
-    stderr: "",
-  };
+  const status = getApplicationStatus();
+  switch (status.agentExecution) {
+    case "not-implemented":
+      return {
+        exitCode: 0,
+        stdout:
+          "Ariel CLI 已启动。当前尚未实现交互式 Agent。\n使用 ariel --help 查看帮助。\n",
+        stderr: "",
+      };
+  }
 }
