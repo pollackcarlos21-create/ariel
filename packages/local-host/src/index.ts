@@ -1,3 +1,7 @@
-// Resolution-only placeholder; no host adapters or composition API.
-import "@ariel/core";
-import "@ariel/providers";
+import { type ModelResult, requestModelText } from "@ariel/core";
+import { createInMemoryModelPort } from "@ariel/providers";
+
+export function runInMemoryModelDemo(userText: string): Promise<ModelResult> {
+  const modelPort = createInMemoryModelPort();
+  return requestModelText({ userText }, modelPort);
+}

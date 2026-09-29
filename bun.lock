@@ -22,6 +22,7 @@
       },
       "dependencies": {
         "@ariel/core": "workspace:*",
+        "@ariel/local-host": "workspace:*",
       },
     },
     "packages/core": {

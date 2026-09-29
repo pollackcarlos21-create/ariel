@@ -46,6 +46,23 @@
 - 实际执行安装、冻结锁文件安装、类型检查、lint、格式化、测试、build、CLI 与本地 executable 调用及 Git diff 检查。
 - 不引入 Application service object、Runtime facade、generic dispatcher、capabilities registry 或 runtime/provider/session/tool/Agent Loop 结构。
 
+## Milestone 004 — Model Interaction Boundary
+
+范围：以 deterministic in-memory adapter 建立 CLI → local-host → core → ModelPort → providers adapter 的真实纵向调用链，验证离线模型交互边界，不集成实际 LLM。
+
+验收目标：
+
+- core 新增 `ModelRequest`、`ModelError`、`ModelResult`、`ModelPort` 与 `requestModelText`；保留 `ApplicationStatus` 的原有精确语义。
+- `requestModelText` 拒绝空白 userText 且不调用 port；合法请求原样交给 port 恰好一次，原样传回结果，不改写 userText 或合并 systemText。
+- 采用 `Promise<ModelResult>` 完整结果；公共错误类别仅有 core validation 的 `invalid-request` 与 adapter 预期失败的 `provider-failure`，不掩盖意外 throw/reject。
+- providers 提供输入相关、确定性的 in-memory adapter；无网络、API key、配置、随机数、时钟或资源生命周期。
+- local-host 装配真实 adapter 并调用 core；CLI 只因真实调用增加 `@ariel/local-host: workspace:*`，不直接依赖 providers。
+- `runCli` 统一迁移为 `Promise<CliResult>`，bin.ts await 后处理 process 边界；唯一新增命令为 `model-demo <text>`，输出明确标识模拟演示，拒绝缺失与多余参数。
+- 通过 core 手写 port 测试、真实 adapter/composition 测试和 async CLI/executable 测试验证调用链；保持现有 architecture gates、core `types: []` 和 browser-target build。
+- 记录 Accepted ADR-006，区分 runtime control flow 与 source dependency direction，同步当前实现与长期开发文档。
+- 实际执行安装、冻结锁文件安装、类型检查、lint、格式化、测试、build、CLI/local executable/build artifact 调用及 Git diff 检查。
+- 不引入真实 provider SDK、streaming、cancellation、usage、model identity、retry、auth/config、session、tool 或 agent loop；真实 I/O 需求需重新审核。
+
 ## 后续阶段 — 待 Chief Architect 批准
 
 范围、编号与具体验收目标待单独决策；不得将后续计划视为当前已实现能力，或据此提前实现业务。
