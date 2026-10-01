@@ -63,6 +63,35 @@
 - 实际执行安装、冻结锁文件安装、类型检查、lint、格式化、测试、build、CLI/local executable/build artifact 调用及 Git diff 检查。
 - 不引入真实 provider SDK、streaming、cancellation、usage、model identity、retry、auth/config、session、tool 或 agent loop；真实 I/O 需求需重新审核。
 
+## Milestone 005 — First Real Model Adapter Contract Review
+
+状态：已完成契约审查并经 Chief Architect 审核通过；documentation-only architecture milestone。
+
+范围：记录 Agent execution 的工程语义与延期决定，以及第一个真实 DeepSeek non-streaming text adapter 的实现契约；不新增 runtime capability。
+
+验收目标：
+
+- 新增 Accepted ADR-007，明确 application policy ownership、Agent boundary 延期原因与重新审核触发条件；M004 core model contract 与 `ApplicationStatus.agentExecution: "not-implemented"` 不变。
+- [docs/DEEPSEEK.md](DEEPSEEK.md) 记录 2026-10-01 contract review，以及已批准的协议、model、模式、raw fetch 方向、request/response mapping、config、errors、secret hygiene 与 M006 测试要求。
+- 完成 ADR-006 要求的 cancellation、model identity、usage 审查：core public contract 均继续延期；M006 transport deadline 必需，但没有批准具体 timeout 默认值。
+- 现有 dependency direction、core result semantics 与 runtime lifecycle abstraction 不变，不新增 ADR-008。
+- 不修改 production code、tests、package/lockfile，不增加 dependency、SDK、CLI command、env reading 或 API key handling，不调用 DeepSeek API。
+- 同步架构与决策索引，实际运行 frozen-lockfile install、typecheck、lint、format check、tests、build 和 Git diff 检查。
+
+## Milestone 006 — DeepSeek Model Adapter Implementation
+
+状态：Planned；尚未开始。
+
+范围：只实现 [DeepSeek implementation contract](DEEPSEEK.md) 所批准的单轮、非流式纯文本路径。实现前重新核验官方 API；不新增永久 demo command，不改变现有 in-memory demo。
+
+验收目标：
+
+- 固定官方 HTTPS Chat Completions endpoint、`deepseek-flash`、thinking disabled、stream false，使用 raw fetch；local-host 显式提供 credential、model 与有限正数 timeoutMs。
+- 保持 M004 core public contract，严格映射完整 final text 与预期 provider failures，保留 unexpected throw/reject；不自动 retry，不跟随 redirect，不暴露 reasoning。
+- Deadline 覆盖连接、等待与 body consumption，到期实际 abort transport 并清理 timer；不将 `Promise.race()` 等同于 cancellation。
+- Pure mapping 与 transport/request tests 进入普通 CI，禁止真实网络；真实 integration verification 只能在提供 credential 并明确授权后 opt-in，不进入默认 CI。
+- 没有真实 integration evidence 时，不声称真实 DeepSeek connection 已完成验证；不增加 Agent、Session、Tool、streaming、public usage/identity/cancellation 或 retry/fallback。
+
 ## 后续阶段 — 待 Chief Architect 批准
 
 范围、编号与具体验收目标待单独决策；不得将后续计划视为当前已实现能力，或据此提前实现业务。

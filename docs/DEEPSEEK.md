@@ -1,0 +1,225 @@
+# DeepSeek First Real Model Adapter Contract
+
+Contract review date: 2026-10-01
+
+本文件记录 Chief Architect 已批准的第一个真实 provider implementation contract，适用范围是 DeepSeek 的单次、非流式、纯文本输入到完整 final text 输出。它不是通用 Provider framework。
+
+这是 M006 的已批准实现方向。M005 只记录契约；当前 providers 仍只有 `createInMemoryModelPort()`，没有 DeepSeek adapter、HTTP 调用、credential/config 读取或真实 integration evidence。现有 CLI `model-demo` 仍是 in-memory simulation。
+
+外部 DeepSeek API 会变化。M006 实现前以及官方 API 发生变化时，必须重新核验本文使用的 endpoint、model identifier、模式、response schema 和错误行为；不能将本次文档快照视为永久的 provider 保证。
+
+## 已批准的协议路径
+
+| 项目 | M006 contract |
+| --- | --- |
+| Provider | DeepSeek |
+| Method / endpoint | `POST https://api.deepseek.com/chat/completions` |
+| Model | `deepseek-flash` |
+| Thinking | `{"type":"disabled"}` |
+| Streaming | `false` |
+| Client direction | raw `fetch` |
+| Authentication | `Authorization: Bearer <API_KEY>` |
+| Content-Type | `application/json` |
+
+兼容 OpenAI schema 不意味着必须依赖 OpenAI SDK。M006 按 raw fetch 方向实现，不因此新增 SDK 或其他 provider 协议。
+
+## Request mapping
+
+| Ariel input | DeepSeek wire mapping |
+| --- | --- |
+| `ModelRequest.userText` | user message 的 string `content`，原样传递 |
+| `ModelRequest.systemText !== undefined` | 在 user message 前加入 system message，string `content` 原样传递 |
+| `systemText === undefined` | 完全省略 system message |
+| `systemText === ""` | 保留空字符串的 system message |
+
+Adapter 不得 trim、rewrite、拼接 system/user，或加入隐藏的 provider-owned Ariel product prompt。core 原有空白 userText validation 不变；合法 request 的文本继续原样交给 port。发送 system message 不承诺模型一定遵从 instruction，也不承诺不同 model 的行为一致。
+
+固定 request body 行为如下；这是设计示例，不是 M005 实际发送的请求：
+
+```json
+{
+  "model": "deepseek-flash",
+  "messages": [
+    { "role": "system", "content": "Reply briefly." },
+    { "role": "user", "content": "Hello!" }
+  ],
+  "thinking": { "type": "disabled" },
+  "stream": false
+}
+```
+
+`model` 和 `messages` 是 API 必需字段；本 contract 显式固定 `thinking` 与 `stream`，不依赖 provider 的隐含模式。不得加入 `temperature`、`top_p`、`max_tokens`、`seed`、`tools` 或 `response_format`。
+
+## Provider configuration
+
+未来 M006 的最小 config 设计为：
+
+```ts
+interface DeepSeekModelPortConfig {
+  readonly apiKey: string;
+  readonly model: "deepseek-flash";
+  readonly timeoutMs: number;
+}
+```
+
+这段声明仅用于记录设计，当前没有对应生产 TypeScript API。
+
+- `apiKey` 必须显式提供，没有默认值，由 local-host 提供，永不进入 core 或 ModelRequest。
+- `model` 必须显式提供；M006 只批准 `deepseek-flash`，不批准任意 model、隐式选模、registry 或 routing。
+- `timeoutMs` 必须显式提供，且为 finite positive number；provider 不提供隐藏默认值。
+- Chief Architect 尚未冻结任何具体 timeout 数值。local-host 在未来任务批准的 policy 下选择数值，本文不指定默认值。
+- `baseUrl` 不进入 config；M006 固定官方 HTTPS endpoint，不允许自动 redirect 到其他 endpoint。
+
+非法配置应在网络操作前 fail-fast。API key 缺失属于构造/装配阶段的配置失败，不是已经执行的模型 operation 的 provider failure；当前不为此新增 core config error type。
+
+## Timeout 与 cancellation
+
+| 能力 | 决定 |
+| --- | --- |
+| Cooperative caller cancellation | DEFER |
+| Transport deadline | REQUIRED FOR M006 |
+
+Deadline 必须覆盖完整 HTTP operation，包括连接、等待和完整 body consumption；到期真正 abort transport，并在所有结束路径清理 timer。DeepSeek non-streaming keep-alive 空行不能重置 Ariel total deadline。
+
+不得仅用 `Promise.race()` 提前结束等待来冒充 transport cancellation。丢弃 Promise 或停止 await 不等于取消请求；process exit 也不能替代 embeddable API cancellation。
+
+`AbortSignal` / `AbortController` 可以存在于 providers implementation，但不进入 core public contract。本阶段没有调用者通过 ModelPort 合作取消的能力；有限 deadline 不应被描述成完整 caller cancellation API。
+
+本地 transport abort 不承诺 DeepSeek 服务端已经停止 inference 或计费。官方等待连接的 keep-alive/关闭机制也不能替代 Ariel 完整请求 deadline。出现实际用户取消、长期宿主或其他不同的 cancellation 需求时重新审核。
+
+## Completion semantics
+
+只有同时满足以下条件才返回 `status: "completed"`：
+
+- successful HTTP response；
+- valid non-streaming `chat.completion` envelope；
+- exactly one choice；
+- assistant message；
+- `content` 是 string；
+- `finish_reason === "stop"`；
+- no actual tool call output。
+
+Text 原样返回。`content === ""` 和 whitespace-only string 都是合法 completed text；不得 trim，也不得把它们自动改成 error。`tool_calls` 缺失或空数组可表示无工具输出，存在但结构异常仍属于无效 response。
+
+| Response case | ModelResult mapping |
+| --- | --- |
+| 满足上述条件的 final content，包括空字符串和空白字符串 | `completed`，text 原样返回 |
+| `length` | `failed` / `provider-failure` |
+| `content_filter` | `failed` / `provider-failure` |
+| `tool_calls` 或实际工具输出 | `failed` / `provider-failure` |
+| `insufficient_system_resource` | `failed` / `provider-failure` |
+| `aborted` | `failed` / `provider-failure` |
+| null、missing 或非 string content | `failed` / `provider-failure` |
+| empty 或 multiple choices | `failed` / `provider-failure` |
+| malformed JSON | `failed` / `provider-failure` |
+| invalid required response structure | `failed` / `provider-failure` |
+| unknown `finish_reason` | `failed` / `provider-failure` |
+
+HTTP success 不等于 model completion。存在 partial text 时也不能把截断、过滤、资源中断或工具调用静默包装为完整答案；不返回新的 partial-result 或 Tool types。
+
+自然语言 refusal 如果仍是正常 `stop` 和合法 final text，就作为 completed text 返回，不创建独立 refusal semantic。Completed 只承诺协议上的完整 final text，不保证事实正确、任务满足或 instruction 遵从。
+
+## Reasoning
+
+M006 显式关闭 thinking。`ModelResult.completed.text` 只表示 final user-visible content。
+
+不得返回 `reasoning_content`，不得拼接 reasoning 与 final，也不得在 final 缺失时用 reasoning 替代。即使 response 附带 reasoning，也不能让它进入返回的 text。Reasoning exposure 继续延期。
+
+## Error mapping 与安全诊断
+
+Core public error kinds 保持 `"invalid-request" | "provider-failure"`，M006 不增加更多 core error kinds。
+
+Core invalid user text 继续返回 `invalid-request`。以下预期外部失败映射为 `provider-failure`：
+
+- non-2xx HTTP，包括认证拒绝、余额不足、rate limit、server overload/error；
+- DNS/connect/TLS transport failure；
+- deadline 到期；
+- response JSON parse failure；
+- required response schema failure；
+- unsupported completion state。
+
+DeepSeek 400/422 不重新解释成 core `invalid-request`。映射不依赖 provider error body 必定是某个 JSON schema。
+
+Unexpected programming error 继续 throw/reject。不得 blanket catch 所有 exception 后全部改成 `provider-failure`；外部 parse/schema/transport failure 与 adapter bug 必须区分。core、local-host 与 runCli 保持 unexpected error 传播，现有 `bin.ts` 继续承担最外层 process boundary。
+
+Provider failure message 必须由 adapter 生成安全文本。不得直接透传 Authorization、raw request headers、API key、complete provider error body 或 complete upstream exception object；不要把 request/config secret 加进新建异常、日志或 fixture。保留 TLS 验证，不启用会输出 credential 的 transport diagnostics。
+
+## Retry 与 redirect
+
+M006 automatic retry = NONE。一次实际进入 adapter 的 `ModelPort.generateText()` 对应 one attempted DeepSeek generation HTTP request；core validation 拒绝的输入不调用 port，也不发送 HTTP。
+
+不得增加 retry loop、backoff 或 fallback。Raw fetch 不增加 retry；如果未来使用 SDK，隐藏 retry 必须显式关闭并经过重新审核。
+
+HTTP redirect 必须拒绝，不能自动跟随到未批准 endpoint。Transport tests 必须验证 one HTTP attempt 和 redirect rejection，不能仅靠一次 port invocation 推断没有隐藏网络重试。
+
+## Model identity 与 usage
+
+Configured/requested model identity 在 adapter config 内明确为 `deepseek-flash`。Provider-reported response identity 继续 DEFER from core contract，不新增 `ModelResult.model`；不得把 request identifier 和 reported identity 当作同一种事实或不可变模型版本保证。
+
+Usage 继续 DEFER from core contract，不新增 ModelUsage、token fields 或 cost fields。未来 M006 adapter 可以丢弃 usage metadata。
+
+未来 integration verification 可以观察 reported identity 和 usage，但它们只作为验证 evidence，不代表公共 API 已批准。Missing usage 表示 unknown，不能填成 `0`，也不能用字符估算冒充 provider token facts。
+
+## Streaming
+
+Streaming 继续 DEFER。M006 只批准 non-streaming JSON response，不创建 StreamingModelPort、ModelEvent、AsyncIterable、SSE abstraction 或 event bus。完整结果仍使用 M004 的 `Promise<ModelResult>`。
+
+## Secret ownership
+
+| 层 | M006 ownership |
+| --- | --- |
+| CLI | presentation；不读取 `--api-key`，不承担 credential parsing |
+| core | 不知道 credential，不读取 `process.env`，不把 secret 放入 ModelRequest |
+| local-host | 未来从明确配置来源读取 `DEEPSEEK_API_KEY`，显式传给 provider factory，并提供 model/timeout policy |
+| providers | 接收 key，构造 Authorization header，知道 DeepSeek endpoint，执行 HTTP 与 wire mapping |
+
+Provider 不自行隐藏读取 `process.env` 获取 credential。API key 不进入 Git、test fixture 或 CLI stderr。M005 不实现 env reading、API key handling 或配置持久化。
+
+## M006 test contract
+
+M006 必须提供三层验证：
+
+| 层 | 范围 | 执行边界 |
+| --- | --- | --- |
+| Pure response mapping tests | DeepSeek JSON fixture 到 ModelResult | 普通 CI，禁止真实网络 |
+| Transport/request tests | HTTP request、deadline、attempt count 和安全错误映射 | 普通 CI，禁止真实网络 |
+| Opt-in real integration verification | 真实 DeepSeek response evidence | 显式提供 real credential 且明确授权后运行；不进入默认 CI |
+
+普通 CI 必须覆盖：
+
+- URL、method、Authorization presence without exposing its value、Content-Type 和 request body；
+- system/user exact mapping，包括 absent 和 empty systemText，以及合法文本的空白保留；
+- model、thinking disabled、stream false；
+- one HTTP attempt、redirect rejected；
+- timeout actually aborts transport、deadline includes body consumption、keep-alive 不重置 deadline、timer cleanup；
+- non-2xx mapping 和全部已批准 finish_reason mappings；
+- malformed JSON/schema、empty/multiple choices、null/missing content；
+- 合法 empty/whitespace completed text；
+- reasoning not exposed、自然语言 refusal 按正常 final text 返回；
+- unexpected programming error 不被伪装成 provider-failure。
+
+Transport tests 使用隔离的测试替身，不增加生产 failure switch、magic prompt、隐藏命令或 generic injection framework。Fixtures 不含真实 credential，测试失败诊断也不能打印 key。
+
+Integration verification 不断言固定自然语言答案，不打印 key，不在默认安装、测试或 CI 中隐式联网。没有真实 integration evidence 时，M006 不得声称真实 DeepSeek connection 已完成验证。
+
+本 contract 不批准新 CLI command，也不允许把现有 in-memory `model-demo` 静默改成真实模型调用；真实 adapter 可以先由明确授权的 integration verification 驱动。
+
+## 与 ADR 的关系及延期范围
+
+本 contract 是 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md) 已批准 provider boundary 的具体实现约束，没有改变 workspace dependency direction、core ModelResult semantics 或 runtime lifecycle abstraction，因此不创建 ADR-008。
+
+未来若增加 core cancellation、public usage、public model identity、provider-neutral lifecycle 或 generic retry/fallback，再重新判断是否需要新 ADR。Agent execution 的定义与延期见 [ADR-007](decisions/ADR-007-agent-execution-semantics-and-deferral.md)。
+
+本 contract 不批准 AgentRequest、AgentResult、AgentExecutor、executeAgentRequest、ExecutionContext、Session、Conversation、TurnId、history/persistence、Tools、Agent Loop、memory、multi-agent、registry/routing、fallback、token budgeting、cost accounting、MCP、server、TUI 或 IDE。`requestModelText()` 保持 generic，ApplicationStatus 仍为 `{ agentExecution: "not-implemented" }`。
+
+## 官方审查依据
+
+以下链接对应 2026-10-01 contract review 所采用的一手资料；M005 没有实际调用 DeepSeek API。实现前重新核验文档不等于已完成真实 integration verification。
+
+- [Your First API Call](https://api-docs.deepseek.com/)
+- [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+- [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+- [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/)
+- [Error Codes](https://api-docs.deepseek.com/quick_start/error_codes/)
+- [Rate Limit & Isolation](https://api-docs.deepseek.com/quick_start/rate_limit/)
+- [Change Log](https://api-docs.deepseek.com/updates/)
