@@ -9,5 +9,6 @@
 | [ADR-005](decisions/ADR-005-minimal-application-boundary.md) | 最小 Application Boundary | Accepted |
 | [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md) | 最小 Model Interaction Boundary | Accepted |
 | [ADR-007](decisions/ADR-007-agent-execution-semantics-and-deferral.md) | Agent Execution Semantics and Deferral | Accepted |
+| [ADR-008](decisions/ADR-008-single-source-code-edit-proposal-task.md) | Single-Source Code Edit Proposal Task | Accepted |
 
 重要架构决策应在 `docs/decisions/` 新增 ADR，包含 Context、Decision、Consequences、Alternatives considered，并同步更新本索引和架构文档。上述决定由 Chief Architect 批准；“Accepted”不代表相关业务能力已经实现。

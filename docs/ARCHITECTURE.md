@@ -121,17 +121,17 @@ Deadline 覆盖完整 HTTP operation、到期实际 abort transport，并在所�
 
 Required response envelope 通过 runtime validation；仅完整 `stop`、assistant string content、无实际 tool output 时返回 completed，保留 empty/whitespace text。预期 transport/HTTP/JSON/schema/completion failures 使用安全的 provider-failure 文本；未知 programming error 继续传播。没有 retry 或 redirect，没有 env reading、公开 cancellation、usage、reported identity 或 reasoning exposure。
 
-ADR-006 要求的首次真实 provider 前 cancellation、model identity、usage 审查已在 M005 完成，core public contract 的延期决定不变。上述实现属于 ADR-006 provider boundary 的具体落实，没有改变 dependency direction、core result semantics 或 runtime lifecycle abstraction，不新增 ADR-008；未来公共契约或 lifecycle 变化再判断是否需要新 ADR。
+ADR-006 要求的首次真实 provider 前 cancellation、model identity、usage 审查已在 M005 完成，core public contract 的延期决定不变。M006 的 DeepSeek 实现属于 ADR-006 provider boundary 的具体落实，没有改变 dependency direction、core result semantics 或 runtime lifecycle abstraction，因此该 provider 实现本身未新增 ADR。M007 的 ADR-008 单独记录 application task contract；未来其他公共契约或 lifecycle 变化再判断是否需要新 ADR。
 
-### Agent execution 语义与延期
+### Agent execution 语义与契约状态
 
 Agent execution 是 application 接受一个已定义任务，按照 application-owned policy 处理它，并对本次运行的 completion / failure semantics 负责；model call 是其中的实现能力之一。
 
-当前尚无值得独立命名、测试和承诺的 Ariel application task contract，因此不创建 `AgentRequest`、`AgentResult`、`AgentExecutor`、`executeAgentRequest()` 或 `ExecutionContext`。这不意味着 Agent execution 必须依赖多次 model call、tool、session 或 persistence；一次 model call 可以构成未来某个 Agent execution 的实现路径，但固定 system prompt、ModelPort 调用与 DTO rename 本身不足以证明新的 Agent boundary 已存在。
+M007 已通过 [ADR-008](decisions/ADR-008-single-source-code-edit-proposal-task.md) 建立首个具名 application task contract：Single-Source Code Edit Proposal。该契约冻结输入、application-owned policy、proposal acceptance 与有限 completion semantics；implementation 继续延期，尚无对应 production API 或已实现能力。不创建 `AgentRequest`、`AgentResult`、`AgentExecutor`、`executeAgentRequest()` 或 `ExecutionContext`。这不意味着 Agent execution 必须依赖多次 model call、tool、session 或 persistence；一次 model call 可以构成未来某个 Agent execution 的实现路径，但固定 system prompt、ModelPort 调用与 DTO rename 本身不足以证明新的 Agent boundary 已存在。
 
-CLI 拥有 presentation；local-host 拥有 composition 与 host facts；未来 Ariel application policy 属于 core application layer；provider adapter 只负责 wire protocol mapping，不得隐藏加入 Ariel product identity 或 policy。M004 的 `ModelRequest`、`ModelResult`、`ModelError`、`ModelPort` 与 generic `requestModelText()` 保持原样，`ApplicationStatus.agentExecution` 仍为 `"not-implemented"`。
+CLI 拥有 presentation；local-host 拥有 composition 与 host facts；Ariel application policy 属于 core application layer，M007 仅冻结具体 task policy，尚未实现；provider adapter 只负责 wire protocol mapping，不得隐藏加入 Ariel product identity 或 policy。M004 的 `ModelRequest`、`ModelResult`、`ModelError`、`ModelPort` 与 generic `requestModelText()` 保持原样，`ApplicationStatus.agentExecution` 仍为 `"not-implemented"`。
 
-只有出现明确 application task contract、独立 result/failure semantics、concrete action/environment responsibility 或其他真正不同于 ModelPort 的 application behavior 时，才重新审核 Agent execution boundary。决策见 [ADR-007](decisions/ADR-007-agent-execution-semantics-and-deferral.md)。
+ADR-007 要求从明确 application task、独立 result/failure semantics 或其他真正不同于 ModelPort 的 application behavior 出发重审边界；M007 的具名 task contract 落实了这一触发条件，generic Agent/runtime API 仍延期。具体 task 决策见 ADR-008；其他任务或执行责任的扩展仍需单独审核。Agent execution 的工程定义与延期原则见 [ADR-007](decisions/ADR-007-agent-execution-semantics-and-deferral.md)。
 
 ### core 独立性
 
@@ -154,7 +154,23 @@ core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不�
 
 当前已有 status query、in-memory demo 及显式配置的 DeepSeek adapter/composition，已完成离线测试与一次真实 smoke integration。未来任何 DeepSeek live verification 仍需显式提供 credential 并单独授权，不进入默认 CI；不因此创建 generic application/runtime facade 或 composition framework。外部 API 发生变化时必须重新核验协议契约。
 
+### Single-Source Code Edit Proposal：contract established / implementation deferred
+
+M007 是 docs-only architecture milestone。ADR-008 冻结未来 core 公共契约 `CodeEditTask`、`CodeEditProposal`、`CodeEditError`、`CodeEditProposalResult` 与 `proposeCodeEdit(task, modelPort): Promise<CodeEditProposalResult>`；这些 API 尚未实现或导出。
+
+Task 只接收 `instruction` 与一次输入的 `sourceText`。instruction 至少包含一个非 whitespace 字符，trim 仅用于 validation；sourceText 必须是非空 string，whitespace-only sourceText 仍合法，文本不 trim、normalize 或 rewrite。invalid task 返回 `failed / invalid-task`，零次 ModelPort 调用；合法 task 最多且正常情况下恰好执行一次 model attempt，不 retry、repair 或 fallback。
+
+Core 拥有 application instruction、内部 ModelRequest 构造、private JSON output encoding 与 proposal acceptance policy。Caller 不能通过任意 system prompt 绕过 task policy；现有 ModelPort public contract 与 generic `requestModelText()` 不增加 task-specific policy、responseFormat、schema 或 tool-call capability。Core 仍不知道 DeepSeek、credential、env、fetch 或 CLI；local-host 仍是 composition root，CLI 仍是 thin frontend。
+
+Decoder 只接受恰好包含 string `oldText` / `newText` 的 JSON object，不接受 Markdown code fences 或 JSON repair。oldText 非空，必须在原始 sourceText 中 exact-match 恰好一次；newText 可以为空以表达删除，oldText 与 newText 必须不同。Matching 只按原始 string 比较，不使用 fuzzy matching、whitespace normalization、AST 或 syntax interpretation。
+
+ModelResult.failed 映射为 `model-failure`；预期 decode/schema/anchor/uniqueness/no-op 失败映射为 `invalid-proposal`；unexpected programming throw/reject 原样传播，禁止 blanket catch。`completed` 仅表示已生成一处针对本次 sourceText、具有唯一替换位置且会产生文本变化的修改建议；不保证 instruction 理解、proposal 语义、代码语法、bug 修复、修改应用或 tests 通过。
+
+本契约不批准 file mutation、filesystem/shell execution、generic patch engine 或新 CLI command。后续 implementation 与 ApplicationStatus migration 留给单独批准的 implementation milestone；当前 `agentExecution` 继续为 `"not-implemented"`。
+
 ## DEFERRED：尚未实现的能力
+
+Single-Source Code Edit Proposal 的 production implementation 与 ApplicationStatus migration 继续延期；contract established 不代表 capability implemented。M007 不批准 AgentRuntime、AgentExecutor、ExecutionContext、Session、Conversation、Thread、TurnId、ExecutionId、Tool/registry/loop、filesystem/shell execution、file mutation、Git operations、generic patch engine、StreamingModelPort、public task events、caller cancellation、retry/fallback、public usage/cost/model identity、model routing、metadata bag、generic task-kind union、server protocol、TUI/REPL/IDE integration 或新 CLI command。
 
 DeepSeek production env/config loading 尚未实现。Provider SDK、retry/fallback、conversation、session runtime、tools、permissions、filesystem tools、shell tools、agent loop、context management、memory、multi-agent、patch engine、LSP、MCP 继续延期。
 

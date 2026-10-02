@@ -94,6 +94,22 @@
 - Pure mapping 与 transport/request tests 进入普通 CI，禁止真实网络；真实 integration verification 只能在提供 credential 并明确授权后 opt-in，不进入默认 CI。
 - 没有真实 integration evidence 时，不声称真实 DeepSeek connection 已完成验证；不增加 Agent、Session、Tool、streaming、public usage/identity/cancellation 或 retry/fallback。
 
-## 后续阶段 — 待 Chief Architect 批准
+## Milestone 007 — Single-Source Code Edit Proposal Contract
 
-范围、编号与具体验收目标待单独决策；不得将后续计划视为当前已实现能力，或据此提前实现业务。
+状态：contract established / implementation deferred。
+
+范围：docs-only architecture milestone，依据 Chief Architect 已批准的契约建立第一个具名 application task；不实现 production code，不新增 tests、dependency 或 CLI command。
+
+验收目标：
+
+- 新增 Accepted [ADR-008](decisions/ADR-008-single-source-code-edit-proposal-task.md)，冻结 `CodeEditTask`、`CodeEditProposal`、`CodeEditError`、`CodeEditProposalResult` 与 `proposeCodeEdit(task, modelPort)` 的 public API 设计，尚不实现或导出。
+- instruction 非空白、sourceText 为原始非空 string；invalid task 返回 `invalid-task` 且零次 ModelPort 调用，合法 task 最多且正常情况下恰好一次 model attempt，无 retry/repair/fallback。
+- core 拥有 task instruction、内部 model request、private JSON encoding 与 acceptance policy；decoder 只接受 oldText/newText 两个 string 字段，oldText 在原始 sourceText exact-match 唯一，允许删除，拒绝 no-op。
+- 明确 completed 只承诺一处唯一位置且产生文本变化的 proposal，不保证语义、语法、bug 修复、修改已应用或 tests 通过；ModelResult.failed 映射 model-failure，预期 proposal 校验失败映射 invalid-proposal，unexpected throw/reject 原样传播。
+- ModelPort、ModelRequest、ModelResult 与 generic requestModelText 契约不变；四 workspace 职责与依赖方向不变，ApplicationStatus.agentExecution 保持 `"not-implemented"`。
+- 不创建 runtime/executor/context、session/conversation/thread、tools/loop、文件或 Git 操作、generic patch engine、streaming/events/cancellation、public usage/cost/identity、routing/metadata/task-kind union、server protocol 或 TUI/REPL/IDE integration。
+- 同步架构与决策索引；实际执行 typecheck、lint、format check、tests、build 与 Git diff 检查，确认 production diff 为空。
+
+## 后续 implementation — future / deferred
+
+Single-Source Code Edit Proposal 的实现与 ApplicationStatus migration 属于后续 implementation milestone，保持 future / deferred。范围、编号与具体验收目标待 Chief Architect 单独批准；本轮不设计 M008 API，不得将已建立的契约视为当前已实现能力，或据此提前实现业务。
