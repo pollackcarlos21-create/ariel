@@ -96,7 +96,9 @@ model contract 测试用小型手写 ModelPort 验证调用次数、原始 reque
 
 `tests/deepseek-model.test.ts` 通过公共入口，用 deterministic response fixtures 和 test-local global fetch spy 验证配置、精确 request mapping、required response structure、completion/error mapping、独立 deadline 与 composition。该组使用 `describe.serial`，每次测试恢复 fetch，禁止真实网络、真实 credential 或 production test hook。deadline tests 分别验证 headers 前和 body consumption 期间实际 abort，以及结束后的 timer cleanup；上限配置测试只构造 factory，不等待长 timer。
 
-普通 `bun test` 包含这些离线测试。真实 DeepSeek integration verification 尚未执行，也没有默认运行的 live test；只能在 Chief Architect 单独授权并显式提供 credential 后进行，不进入默认 CI。离线通过不代表实际连接、真实 DNS/TLS failure classification、服务端取消或计费行为已验证。未来 live verification 不打印 key、Authorization、完整 provider body 或请求文本，不断言固定自然语言答案。
+普通 `bun test` 包含这些离线测试，没有默认运行的 live test。2026-10-02 已在明确授权下，于 commit `4d3a2c9` 完成一次真实 DeepSeek successful smoke verification，历史证据与验证边界见 [Real integration verification](DEEPSEEK.md#real-integration-verification)。该次成功调用没有验证真实 DNS/TLS failure classification、服务端取消或计费行为。
+
+未来任何 live verification 仍必须 opt-in，在 Chief Architect 单独授权并显式提供 credential 后进行，不进入默认 CI，不成为常规开发命令。默认安装、测试与 CI 不得隐式调用真实 DeepSeek API。Live verification 不打印 key、Authorization、完整 provider body 或请求文本，不断言固定自然语言答案。
 
 ## 包解析与边界
 

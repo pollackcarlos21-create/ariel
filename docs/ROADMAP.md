@@ -80,9 +80,11 @@
 
 ## Milestone 006 — DeepSeek Model Adapter Implementation
 
-状态：离线实现已完成并通过本地测试；真实 DeepSeek integration verification 尚未执行，因此 milestone 尚未关闭。
+状态：已完成。
 
 范围：只实现 [DeepSeek implementation contract](DEEPSEEK.md) 所批准的单轮、非流式纯文本路径。Phase 1 仅实现代码与完全离线测试，不读取真实 API key 或调用真实 endpoint；不新增永久 demo command，不改变现有 in-memory demo。
+
+实现与验证记录：offline implementation 与 tests 已完成，实现 commit 为 `4d3a2c9`（`feat: implement DeepSeek model adapter`）；GitHub CI #6 为 `completed` / `success`。2026-10-02 已完成一次明确授权的真实 DeepSeek smoke integration verification，返回 `completed`，integration exit code 为 `0`。这些历史事实由 Chief Architect 确认，详细记录见 [Real integration verification](DEEPSEEK.md#real-integration-verification)。
 
 验收目标：
 

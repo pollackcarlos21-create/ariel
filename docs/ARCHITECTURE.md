@@ -7,7 +7,7 @@
 | Workspace | 路径 | 已批准的职责 | 当前实现 |
 | --- | --- | --- | --- |
 | `@ariel/core` | `packages/core` | 可嵌入、宿主和前端无关的核心 | application status query、model interaction contract 与 `requestModelText` |
-| `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | in-memory echo 与 DeepSeek raw fetch adapter；DeepSeek 仅完成离线验证 |
+| `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | in-memory echo 与 DeepSeek raw fetch adapter；已通过离线测试及一次真实 smoke integration |
 | `@ariel/local-host` | `packages/local-host` | 本地宿主 adapter 与 composition root | `runInMemoryModelDemo(userText)` 与显式 config 的 `runDeepSeekModelRequest(request, config)` |
 | `@ariel/cli` | `apps/cli` | 薄 CLI frontend | async `runCli`；默认状态提示、help、version、参数错误及 `model-demo <text>` 的中文 presentation |
 
@@ -109,13 +109,13 @@ CLI：runCli(["model-demo", text])
   -> CLI 中文 presentation
 ```
 
-runtime control flow 不等于 source dependency direction。core 调用由 local-host 注入的 ModelPort，不 import providers；providers 从 core 公共入口导入契约。local-host 只创建 adapter、构造 request、调用 core 并返回结果，不负责 validation、prompt policy 或 retry。该链是离线架构验证，不是实际 LLM integration，也不是 Agent execution；ApplicationStatus 不变。决策见 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md)。
+runtime control flow 不等于 source dependency direction。core 调用由 local-host 注入的 ModelPort，不 import providers；providers 从 core 公共入口导入契约。local-host 只创建 adapter、构造 request、调用 core 并返回结果，不负责 validation、prompt policy 或 retry。该调用链最初通过 in-memory 路径完成离线架构验证；DeepSeek 路径已于 2026-10-02 完成一次真实 smoke integration，但这仍不是 Agent execution；ApplicationStatus 不变。决策见 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md)。
 
-### 首个真实 provider：DeepSeek 的离线实现
+### 首个真实 provider：DeepSeek
 
 M005 冻结的 DeepSeek contract 已在 M006 Phase 1 实现：`POST https://api.deepseek.com/chat/completions`，显式选择 `deepseek-flash`、`thinking: { type: "disabled" }` 与 `stream: false`，使用 raw fetch。`@ariel/providers` 导出 `DeepSeekModelPortConfig` 与 `createDeepSeekModelPort(config)`；内部 parser/transport 不导出。具体 mapping 与测试契约见 [DeepSeek implementation contract](DEEPSEEK.md)。
 
-local-host 的 `runDeepSeekModelRequest(request, config)` 只创建 DeepSeek port、调用 core `requestModelText` 并返回结果，不读取 env、增加 prompt 或重复 validation。config 显式携带 credential、model 和 timeout；CLI 仍只调用 in-memory demo。真实 DeepSeek integration verification 尚未执行，离线测试通过不等于真实连接已经验证。
+local-host 的 `runDeepSeekModelRequest(request, config)` 只创建 DeepSeek port、调用 core `requestModelText` 并返回结果，不读取 env、增加 prompt 或重复 validation。config 显式携带 credential、model 和 timeout；CLI 仍只调用 in-memory demo。真实 DeepSeek smoke integration 已于 2026-10-02 在 commit `4d3a2c9` 上成功验证；这是一次 successful smoke verification，记录与验证边界见 [Real integration verification](DEEPSEEK.md#real-integration-verification)。
 
 Deadline 覆盖完整 HTTP operation、到期实际 abort transport，并在所有结束路径清理 timer。`timeoutMs` 只接受 `1..2147483647` 的整数毫秒；上限是 Bun 单个 timer 的 host-runtime representability bound，不是 product policy、默认或推荐 timeout。非法值在 factory 同步 fail-fast，不 clamp，不做 chunked timer。local-host 必须显式传入 timeout，没有隐藏默认值。
 
@@ -152,11 +152,11 @@ core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不�
 - local-host 是 composition root，负责装配核心和具体 adapter，承载本地宿主实现。
 - CLI 负责入口和用户交互，将业务委托给核心及 local-host，不承载核心逻辑。
 
-当前已有 status query、in-memory demo 及显式配置的 DeepSeek adapter/composition 离线实现。DeepSeek 真实 integration verification 仍需提供 credential 并单独授权，不进入默认 CI；不因此创建 generic application/runtime facade 或 composition framework。外部 API 发生变化时必须重新核验协议契约。
+当前已有 status query、in-memory demo 及显式配置的 DeepSeek adapter/composition，已完成离线测试与一次真实 smoke integration。未来任何 DeepSeek live verification 仍需显式提供 credential 并单独授权，不进入默认 CI；不因此创建 generic application/runtime facade 或 composition framework。外部 API 发生变化时必须重新核验协议契约。
 
 ## DEFERRED：尚未实现的能力
 
-DeepSeek production env/config loading 与真实 integration verification 尚未实现或执行。Provider SDK、retry/fallback、conversation、session runtime、tools、permissions、filesystem tools、shell tools、agent loop、context management、memory、multi-agent、patch engine、LSP、MCP 继续延期。
+DeepSeek production env/config loading 尚未实现。Provider SDK、retry/fallback、conversation、session runtime、tools、permissions、filesystem tools、shell tools、agent loop、context management、memory、multi-agent、patch engine、LSP、MCP 继续延期。
 
 当前 ModelPort 使用 `Promise<ModelResult>` 完整结果，不定义 streaming、cancellation、usage 或 model identity 契约，不注入 AbortSignal、ReadableStream 或 DOM lib。M005 审查没有新增这些公共字段或接口；出现 caller cancellation、identity/usage 的真实消费者时重新审核相应契约。首 token UI、用户取消、tool call、multi-block output 或长时真实远程调用出现时，重新审核独立 streaming capability。没有对应空接口或占位目录。
 

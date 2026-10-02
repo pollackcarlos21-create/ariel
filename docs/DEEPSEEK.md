@@ -4,7 +4,7 @@ Contract review date: 2026-10-01
 
 本文件记录 Chief Architect 已批准的第一个真实 provider implementation contract，适用范围是 DeepSeek 的单次、非流式、纯文本输入到完整 final text 输出。它不是通用 Provider framework。
 
-M005 记录契约；M006 Phase 1 已实现 `createDeepSeekModelPort(config)` 和 local-host 的 `runDeepSeekModelRequest(request, config)`，并通过 mocked fetch 离线验证。`createInMemoryModelPort()` 保留，现有 CLI `model-demo` 仍是 in-memory simulation。尚未执行真实 DeepSeek integration verification，没有真实 API response evidence，也没有 production env reading 或新 CLI command。
+M005 记录契约；M006 Phase 1 已实现 `createDeepSeekModelPort(config)` 和 local-host 的 `runDeepSeekModelRequest(request, config)`，并通过 mocked fetch 离线验证。2026-10-02 已完成一次明确授权的真实 DeepSeek smoke integration，记录见 [Real integration verification](#real-integration-verification)。`createInMemoryModelPort()` 保留，现有 CLI `model-demo` 仍是 in-memory simulation，没有 production env reading 或新 CLI command。
 
 外部 DeepSeek API 会变化。M006 实现前以及官方 API 发生变化时，必须重新核验本文使用的 endpoint、model identifier、模式、response schema 和错误行为；不能将本次文档快照视为永久的 provider 保证。
 
@@ -189,7 +189,7 @@ Provider 不自行隐藏读取 `process.env` 获取 credential。真实 API key 
 
 ## M006 test contract
 
-M006 的验证分为三层；Phase 1 已实现前两层，第三层尚未执行：
+M006 的验证分为三层；Phase 1 已实现前两层，第三层已于 2026-10-02 完成一次明确授权的 successful smoke verification：
 
 | 层 | 范围 | 执行边界 |
 | --- | --- | --- |
@@ -217,6 +217,32 @@ Transport tests 使用隔离的测试替身，不增加生产 failure switch、m
 Integration verification 不断言固定自然语言答案，不打印 key，不在默认安装、测试或 CI 中隐式联网。没有真实 integration evidence 时，M006 不得声称真实 DeepSeek connection 已完成验证。
 
 本 contract 不批准新 CLI command，也不允许把现有 in-memory `model-demo` 静默改成真实模型调用；真实 adapter 可以先由明确授权的 integration verification 驱动。
+
+## Real integration verification
+
+以下是 Chief Architect 已确认的历史验证记录：2026-10-02 在明确授权下，通过 `@ariel/local-host.runDeepSeekModelRequest(...)` 执行了一次真实 DeepSeek request。
+
+| Evidence | Recorded value |
+| --- | --- |
+| Verification date | `2026-10-02` |
+| Verified commit | `4d3a2c93e3606481008a5379090b7bd4d87a8ba9` |
+| Request | one explicitly authorized live request |
+| Model / thinking / stream | `deepseek-flash` / `disabled` / `false` |
+| Invocation timeoutMs | `180000` |
+| Result | `status = completed` |
+| Text length | `textLength = 22` |
+| Preview | `Received your request.` |
+| Integration exit code | `0` |
+| Working tree after verification | clean；`git status --short` 无输出 |
+| Credential lifecycle | 临时使用，未写入文件、Git、测试或日志；运行结束后 `DEEPSEEK_API_KEY` 已从 shell unset |
+
+`180000ms` 仅是该次 verification invocation 显式传入的值，不是 default timeout、recommended timeout 或 product policy；local-host 仍必须显式提供 `timeoutMs`。
+
+该次成功验证了 production adapter 访问真实官方 endpoint、credential authentication、`deepseek-flash` request 被接受，以及 non-streaming + thinking disabled 调用成功。真实 response 通过当前 runtime validator，final content 映射为 `ModelResult.completed`，local-host → core → provider 的真实调用路径得到验证。
+
+这只是一次 successful smoke verification，不代表 production ready 或全部 DeepSeek 行为已验证。HTTP/provider failures、timeout、malformed schema、error propagation 和 secret hygiene 仍由 deterministic offline tests 覆盖；真实 network error classification、billing cancellation 与 server-side inference cancellation 没有在该次成功调用中得到验证。
+
+未来任何 live verification 仍必须显式 opt-in、单独授权并提供临时 credential，不进入默认 CI，也不打印 API key、Authorization value、完整环境或其他 secret。
 
 ## 与 ADR 的关系及延期范围
 
