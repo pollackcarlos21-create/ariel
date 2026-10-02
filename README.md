@@ -1,43 +1,166 @@
 # Ariel
 
-Ariel 是一个从第一性原理构建 autonomous coding agent 的开源项目。
+English | [简体中文](README.zh-CN.md)
 
-当前具备 TypeScript + Bun + ESM 工程基础、四个 workspace、严格类型检查、lint、自动格式化、测试、架构边界检查、构建命令及 GitHub Actions CI 配置。CLI 默认启动查询 core application status；`model-demo` 通过 local-host、core ModelPort 和 providers adapter 执行 deterministic in-memory simulation，没有调用实际 LLM。
+Ariel is an open-source coding agent project built from first principles. Its v0.2 terminal-native interface lets you open a project, browse source files, describe a change, review a single-file proposal, and explicitly Apply or Reject it. After Apply, you can Undo within the current process.
 
-## 运行 CLI
+Generating a proposal never modifies your files. The TUI writes only after explicit Apply confirmation or an explicit Undo action. The non-interactive `ariel edit` command remains proposal-only. Ariel does not execute shell commands or autonomously modify your repository.
 
-使用 Bun 1.4.2，在仓库根目录执行：
+## Prerequisites
+
+Use Bun 1.4.2 and Git. Run the following commands from the Ariel repository root after cloning. No global installation, npm publishing, Electron, or Tauri is required.
+
+## Install
 
 ```sh
-bun install
+bun install --frozen-lockfile
+```
+
+## Configure
+
+Set your own DeepSeek API key. The value below is a placeholder, not a usable credential:
+
+```sh
+export DEEPSEEK_API_KEY="your-own-deepseek-api-key"
+```
+
+Never put a real key in Git, source code, test fixtures, or logs. Ariel uses the launching process's environment, does not automatically load `.env`, and does not offer an `--api-key` argument or persist credentials. CLI edit rejects missing, empty, or whitespace-only keys with exit code 1. Without a key, the TUI still opens and lets you browse files; Generate explains how to configure the key and restart without making a network request.
+
+## Ariel Interactive TUI
+
+Install, configure, build, and start:
+
+```sh
+bun install --frozen-lockfile
+export DEEPSEEK_API_KEY="your-own-deepseek-api-key"
+bun run build
+bun run ariel
+```
+
+This opens a full-screen terminal interface using the current working directory as the project. To select a different project:
+
+```sh
+bun run ariel .
+bun run ariel /path/to/project
+```
+
+An interactive terminal is required, with a minimum size of `60 × 20`. Wide terminals show file-tree and code panes side by side; below 90 columns, the interface switches to a single pane selected by focus. Smaller terminals show a resize notice. Restrained Unicode borders and ornaments provide a retro terminal layout. `NO_COLOR` disables color; text and `-`/`+` markers remain readable.
+
+```text
+╔══════════════════════════════════════════════════════╗
+║  ✦ ARIEL ✦  project         DEEPSEEK ● CONFIGURED    ║
+╠═══════════════╦══════════════════════════════════════╣
+║ FILE TREE     ║ CODE / DIFF                          ║
+║ ▾ src         ║   1 function loadData() {            ║
+║   example.ts  ║   2   return data;                   ║
+╠═══════════════╩══════════════════════════════════════╣
+║ IDLE       Tab focus · G task · ? help · Ctrl+C quit ║
+║ ❯ Make this function async                          ║
+╚══════════════════════════════════════════════════════╝
+```
+
+This is a layout illustration; actual content and dimensions depend on the terminal, project, and current operation.
+
+1. The default project is the current working directory. Press Ctrl+O to enter another local project directory.
+2. Navigate the file tree with arrow keys, expand or collapse directories, and press Enter to open a UTF-8 source file. Directories load lazily; generated directories such as `.git`, `node_modules`, `dist`, `build`, `coverage`, and `.cache` are ignored.
+3. Press G to focus the task input, enter an instruction, and press Enter to Generate. Before the first Generate, confirm that the selected source will be sent to DeepSeek. This confirmation occurs once per process.
+4. Review Before/After and `PROPOSAL VALIDATED`. Press R to Reject and return to the source without modifying it.
+5. Press A to open the Apply confirmation. Enter confirms the write; Esc cancels. If the file has changed since Generate, Ariel refuses the stale proposal and requires a new Generate.
+6. Press U to Undo. If another process has changed the file after Apply, Ariel refuses to overwrite that content.
+
+| Key | Action |
+| --- | --- |
+| ↑ / ↓, ← / → | Navigate, collapse, or expand the file tree |
+| Enter / Esc | Open or confirm / go back or cancel |
+| Tab | Switch focus |
+| Ctrl+O | Open a project |
+| G | Focus task / Generate |
+| A / R / U | Confirm Apply / Reject / guarded Undo |
+| ? | Open the keyboard reference |
+| Ctrl+C / `:q` | Quit and restore the terminal |
+
+Use Ctrl+J for a newline in task input and Enter to Generate; Ariel does not depend on terminals distinguishing Shift+Enter. Letter shortcuts apply in navigation focus, so typing an instruction does not accidentally trigger Apply or Reject. Contextual shortcuts remain visible.
+
+The complete selected source and your instruction are sent to DeepSeek. Choose only text you are willing to share with the provider. The executable reads the key from its startup environment; do not enter or store it in the TUI. The status bar shows only whether DeepSeek is configured. The model is fixed to `deepseek-flash`, with a host timeout of `120 seconds`.
+
+`CONFIGURED` means a non-empty key was supplied; it does not verify authentication, account balance, or connectivity. On failure, the TUI displays a safe HTTP status or a fixed network, timeout, or response-format explanation. It never displays the provider response body or retries automatically.
+
+Each task makes one model attempt, with no retry, repair, or fallback. Proposals and Undo records live only in the current TUI process; quitting or switching projects does not persist history. The read-only code viewer shows line numbers and clips or scrolls its viewport. Tabs are displayed as four spaces without rewriting the source or the applied text.
+
+Quitting immediately restores the terminal. If an explicitly confirmed Apply or Undo is already running, Ariel waits for that write and its cleanup to finish before the process exits.
+
+The project workflow supports single-link regular UTF-8 text files of at most `5 MiB` inside the selected root. It rejects traversal, absolute file-path escapes, project symlinks, hardlinks, and NUL/binary content. It does not run user code, tests, shell commands, or Git operations. Apply and Undo use hash checks and atomic replacement; they do not provide cross-process locking against hostile processes with the same permissions, crash recovery, or preservation of ACLs and extended attributes. Use this workflow only on local projects you intend to edit.
+
+## CLI Mode
+
+Specify an existing source file and a natural-language instruction:
+
+```sh
+bun run ariel edit src/example.ts "Make this function async"
+```
+
+Replace `src/example.ts` with your own file path. For example, a file that exists in this repository can be used as follows:
+
+```sh
+bun run ariel edit packages/core/src/index.ts "Add a short comment above getApplicationStatus"
+```
+
+`edit` accepts exactly two positional arguments: file and instruction. Absolute paths are supported; relative paths resolve against the current working directory. Input must be a non-empty regular file containing valid UTF-8; whitespace-only text is accepted. Ariel reads only this file and does not search the repository, recurse into directories, or run user code or tests.
+
+The command uses `deepseek-flash`, thinking disabled, and non-streaming output. Local-host explicitly supplies a `120000ms` total HTTP timeout; the provider itself has no hidden default timeout. There is no automatic retry, repair, or fallback. The complete file and instruction are sent to DeepSeek.
+
+A successful command exits with code 0 and displays a patch-like preview:
+
+```text
+Ariel Code Edit Proposal
+
+File: src/example.ts
+
+--- before
++++ after
+@@ proposal @@
+- function loadData() {
++ async function loadData() {
+
+Proposal validated.
+No files were modified.
+```
+
+Validation checks that the model returned a JSON proposal with exactly `oldText` and `newText`, that `oldText` has one exact-match position in the original source, and that the replacement changes the text. Empty `newText` means deletion. Validation does not guarantee that the instruction was understood correctly, the code is semantically or syntactically correct, a bug is fixed, or tests pass. The CLI does not apply the change.
+
+The preview preserves proposal newlines and tabs, escapes other `Cc` control characters, escapes newlines and tabs in file labels, and hides text matching the current credential. It is not a directly applicable unified patch. Review the proposal before deciding how to edit your file.
+
+Argument, configuration, file-read, task, model, and proposal failures exit with code 1 and a short, safe error. Unexpected errors are handled by the executable boundary without exposing a stack trace.
+
+## Other CLI Paths
+
+```sh
 bun run ariel --help
 bun run ariel --version
 bun run ariel
 bun run ariel model-demo "hello"
 ```
 
-- `ariel --help`：显示名称、描述、usage 和支持的选项。
-- `ariel --version`：输出 CLI package.json 中的版本。
-- `ariel`：显示当前尚未实现交互式 Agent 的状态信息，退出码为 0。
-- `ariel model-demo "<text>"`：执行离线 in-memory 模拟演示，显示模拟标识和 `Echo: <text>`，退出码为 0。不需要 API key、网络、认证或配置。
-- 未知参数：向 stderr 输出错误和帮助提示，退出码为 1。
+- `--help` displays usage, commands, and options.
+- `--version` prints the version from the CLI package manifest.
+- No arguments or one project path opens the TUI; non-interactive terminals fail safely without starting a background process.
+- `model-demo "<text>"` is an offline in-memory simulation. It accepts exactly one non-whitespace text argument and uses neither a real model nor an API key.
+- Unknown arguments print an error and a help hint to stderr, then exit with code 1.
 
-`model-demo` 恰好接收一个 text 参数；缺失、多余或空白 text 均退出 1。它不读取 stdin、不进入交互模式。没有 `--system` 或其他模型选项。
+`bun run ariel` uses the root launcher and is the current TUI entrypoint. `./node_modules/.bin/ariel` still points to the legacy CLI `src/bin.ts`, supporting non-interactive status, help, version, edit, and model-demo; its no-argument invocation does not open the TUI. All workspaces remain private. Global installation and npm packaging are not provided yet.
 
-安装后也可使用 `./node_modules/.bin/ariel`；如需在当前命令中直接使用名称：
+## Architecture and Development
 
-```sh
-PATH="$PWD/node_modules/.bin:$PATH" ariel --help
-```
+Core owns `proposeCodeEdit(task, modelPort)`, task policy, and proposal acceptance. Local-host owns file access, the project-root boundary, DeepSeek composition, and explicit Apply/Undo. CLI and TUI own presentation; providers own wire-protocol mapping. Core has no knowledge of paths, filesystem, environment variables, credentials, terminals, or DeepSeek. `getApplicationStatus()` returns `{ agentExecution: "single-source-code-edit-proposal" }`.
 
-core 保留无参数、同步、无副作用的 `getApplicationStatus(): ApplicationStatus`，返回 `{ agentExecution: "not-implemented" }`。新增的 `requestModelText(request, modelPort): Promise<ModelResult>` 校验输入并显式调用传入的 ModelPort；契约不依赖供应商 SDK 或宿主实现。
+Automatic file mutation, autonomous multi-file tasks, autonomous repository exploration, shell execution, automatic tests or Git operations, Tools, AgentRuntime, Sessions, streaming, retry/fallback, MCP/LSP, IDE integration, remote servers, accounts, cloud sync, telemetry, and desktop wrappers are not implemented.
 
-providers 提供确定性的 in-memory adapter，local-host 负责离线 demo 的真实装配。该 demo 不代表 Agent execution，application status 不变。当前没有真实 LLM provider、会话、tool、streaming 或 agent loop；包均为 private，未发布。
+The engineering documents below are currently maintained in Chinese:
 
-- [开发与验证](docs/DEVELOPMENT.md)
-- [当前架构与边界](docs/ARCHITECTURE.md)
-- [阶段与验收目标](docs/ROADMAP.md)
-- [架构决策索引](docs/DECISIONS.md)
-- [Coding agent 仓库规则](AGENTS.md)
+- [Development and validation](docs/DEVELOPMENT.md)
+- [Architecture and boundaries](docs/ARCHITECTURE.md)
+- [Roadmap and acceptance goals](docs/ROADMAP.md)
+- [Architecture decision index](docs/DECISIONS.md)
+- [Repository instructions](AGENTS.md)
 
-许可证尚待 Chief Architect 决定，仓库不包含 LICENSE。
+The license decision is pending Chief Architect approval; this repository does not contain a LICENSE file.

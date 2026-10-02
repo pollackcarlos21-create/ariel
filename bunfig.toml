@@ -1,0 +1,5 @@
+# Credentials come only from the launching process environment.
+env = false
+
+[test]
+root = "./tests"

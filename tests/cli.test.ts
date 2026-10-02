@@ -17,6 +17,7 @@ describe("CLI behavior without a process or terminal", () => {
       "--version",
       "model-demo <text>",
       "in-memory",
+      'edit <file> "<instruction>"',
     ]) {
       expect(result.stdout).toContain(text);
     }
@@ -34,7 +35,7 @@ describe("CLI behavior without a process or terminal", () => {
     expect(await runCli([])).toEqual({
       exitCode: 0,
       stdout:
-        "Ariel CLI 已启动。当前尚未实现交互式 Agent。\n使用 ariel --help 查看帮助。\n",
+        "Ariel CLI 已启动。当前支持单源码修改建议任务。\n使用 ariel --help 查看帮助。\n",
       stderr: "",
     });
   });

@@ -5,25 +5,31 @@
   "packageManager": "bun@1.4.2",
   "workspaces": [
     "apps/cli",
+    "apps/tui",
     "packages/core",
     "packages/providers",
     "packages/local-host"
   ],
   "scripts": {
-    "ariel": "bun ./apps/cli/src/bin.ts",
+    "ariel": "bun ./ariel.ts",
     "typecheck": "bun run --filter '@ariel/*' typecheck && tsc --project tsconfig.json",
     "lint": "biome lint --error-on-warnings .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "build": "bun run --filter '@ariel/*' build"
+    "build": "bun run --filter '@ariel/*' build && bun build ./ariel.ts --target bun --format esm --packages external --outdir dist",
+    "test:tui": "bun test tests/tui-controller.test.ts tests/tui-render.test.tsx tests/tui-entry.test.ts tests/tui-lifecycle.test.ts"
   },
   "devDependencies": {
     "@ariel/cli": "workspace:*",
     "@ariel/core": "workspace:*",
     "@ariel/local-host": "workspace:*",
     "@ariel/providers": "workspace:*",
+    "@ariel/tui": "workspace:*",
     "@biomejs/biome": "2.5.14",
     "@types/bun": "1.4.2",
+    "@types/react": "19.3.0",
+    "ink-testing-library": "4.0.0",
+    "react": "19.3.0",
     "typescript": "5.9.3"
   }
 }

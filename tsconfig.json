@@ -1,5 +1,9 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "types": ["bun"], "resolveJsonModule": true },
-  "include": ["tests/**/*.ts"]
+  "compilerOptions": {
+    "types": ["bun"],
+    "resolveJsonModule": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["ariel.ts", "tests/**/*.ts", "tests/**/*.tsx"]
 }

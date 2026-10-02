@@ -1,4 +1,12 @@
 export {
+  type CodeEditError,
+  type CodeEditProposal,
+  type CodeEditProposalResult,
+  type CodeEditTask,
+  proposeCodeEdit,
+} from "./code-edit";
+
+export {
   type ModelError,
   type ModelPort,
   type ModelRequest,
@@ -7,9 +15,9 @@ export {
 } from "./model";
 
 export interface ApplicationStatus {
-  readonly agentExecution: "not-implemented";
+  readonly agentExecution: "single-source-code-edit-proposal";
 }
 
 export function getApplicationStatus(): ApplicationStatus {
-  return { agentExecution: "not-implemented" };
+  return { agentExecution: "single-source-code-edit-proposal" };
 }

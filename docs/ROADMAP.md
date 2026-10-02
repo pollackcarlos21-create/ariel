@@ -96,7 +96,7 @@
 
 ## Milestone 007 — Single-Source Code Edit Proposal Contract
 
-状态：contract established / implementation deferred。
+状态：contract established / implementation deferred（M007 的历史范围；后续实现见 M008/M009）。
 
 范围：docs-only architecture milestone，依据 Chief Architect 已批准的契约建立第一个具名 application task；不实现 production code，不新增 tests、dependency 或 CLI command。
 
@@ -110,6 +110,57 @@
 - 不创建 runtime/executor/context、session/conversation/thread、tools/loop、文件或 Git 操作、generic patch engine、streaming/events/cancellation、public usage/cost/identity、routing/metadata/task-kind union、server protocol 或 TUI/REPL/IDE integration。
 - 同步架构与决策索引；实际执行 typecheck、lint、format check、tests、build 与 Git diff 检查，确认 production diff 为空。
 
-## 后续 implementation — future / deferred
+## Milestone 008 — Single-Source Code Edit Proposal Implementation
 
-Single-Source Code Edit Proposal 的实现与 ApplicationStatus migration 属于后续 implementation milestone，保持 future / deferred。范围、编号与具体验收目标待 Chief Architect 单独批准；本轮不设计 M008 API，不得将已建立的契约视为当前已实现能力，或据此提前实现业务。
+状态：implementation established；Chief Architect final review 不等于 milestone closure。
+
+范围：实现 ADR-008 已冻结的 core application task，使用现有 ModelPort，保持 model contract 和 dependency direction 不变。
+
+实现与验收目标：
+
+- 从 core 公共入口导出 CodeEditTask、CodeEditProposal、CodeEditError、CodeEditProposalResult 与 proposeCodeEdit；不增加 path、credential、system prompt 或未来 API。
+- Runtime input validation 保留原始 instruction/sourceText；invalid task 零次 port 调用，合法输入恰好一次 model attempt，无 retry/repair/fallback。
+- Core 构造固定 application instruction 和 JSON user input；严格解码 oldText/newText，验证唯一 exact-match start position，包括重叠位置，允许删除，拒绝 no-op。
+- Model failure 和预期 invalid proposal 返回独立 task failure；unexpected programming throw/reject 原样传播，JSON catch 只归一化 SyntaxError。
+- Tests 从公共入口验证 ADR-008 semantics；ApplicationStatus 精确迁移为 `single-source-code-edit-proposal`。
+- 不应用修改、不读写文件、不新增 CLI command；文件/用户入口属于 M009。
+
+## Milestone 009 — First User-Facing Code Edit CLI
+
+状态：user-facing implementation established；真实 smoke 结果与本地/远程验证分别记录，不以本地实现宣称 milestone closed。
+
+范围：Ariel v0.1 的首个真实用户工作流：fresh clone → frozen-lockfile install → 配置自己的 DEEPSEEK_API_KEY → `bun run ariel edit <file> "<instruction>"` → validated proposal preview；不自动修改文件。
+
+实现与验收目标：
+
+- 新增 Accepted [ADR-009](decisions/ADR-009-first-user-facing-code-edit-cli.md)，只批准单文件、单 instruction、单 proposal 的 CLI workflow。
+- edit 恰好接收两个 positional args，保留 default/help/version/in-memory model-demo；API key 仅由 executable edit boundary 读取，不持久化或输出。
+- local-host 读取指定文件，按 cwd 解析 relative path，支持 absolute path，原样保留文本；空文件和读取错误在 model operation 前安全失败。
+- local-host 显式装配 DeepSeek，固定 deepseek-flash；v0.1 host product timeout 为 `120000ms`，provider 自身仍无隐藏默认 timeout。
+- core 独立验证 proposal，CLI 逐行显示 oldText/newText，明确 validation 的有限含义以及文件未修改。
+- 参数/config/file-read/task/model/proposal 预期失败退出 1；unexpected error 继续由 bin.ts 最外层处理，不泄漏 stack、key、Authorization、完整源文件或 raw provider body。
+- 普通 tests 使用 temporary files 与 mocked fetch，禁止真实网络或真实 key；live smoke 仅在显式授权和 credential available 时执行，不自动 retry，不进入默认 CI。
+- README 给出真实安装、配置、运行与 proposal-only 说明；运行 typecheck/lint/format check/tests/build/Git diff checks，保持无依赖变化。
+
+## v0.2 — Terminal-Native Interactive Coding Assistant
+
+范围：正式 terminal-native TUI，默认打开 cwd，提供项目选择、lazy 文件树、只读源码、natural-language instruction、真实 DeepSeek proposal、Before/After、Reject、用户明确 Apply 和进程内 Undo。
+
+实现与验收目标：
+
+- 新增 apps/tui workspace，使用经过 Bun compatibility 验证的 Ink/React presentation，直接消费 local-host 公共入口；ADR-010 记录 terminal boundary，core public contract 与独立性不变。
+- `bun run ariel` 默认进入 TUI；保留 --help/--version/edit/model-demo；一个 project path 与 Ctrl+O 选择项目，不创建 HTTP server 或 local daemon。
+- Credential 仅由 executable composition boundary 从 DEEPSEEK_API_KEY 读取，不在 TUI 输入或持久化，不进入源码/fixture/log；model 固定 deepseek-flash，host 显式 120000ms timeout。
+- Project canonical containment 覆盖 listing/read/apply/undo，拒绝 traversal、absolute file escape、symlink/hardlink；支持不超过 5 MiB 的 regular UTF-8 files，lazy tree 忽略生成目录。
+- Generate 复用 core proposeCodeEdit，一次 attempt；第一次 Generate 前明确 privacy confirmation，不添加 loop/session/runtime。
+- Keyboard-first 操作、帮助、上下文按键、只读 line-numbered code viewer、windowed scrolling、窄 terminal/resize 安全处理与 NO_COLOR。
+- Before/After 只表示文本建议；Reject 不写文件；Apply 二次确认、hash stale check、再次 exact unique match、atomic write；Undo 只在 after hash/content 仍匹配时恢复。
+- ADR-011 记录 frontend-neutral 写入/Undo ownership 与 atomic race/metadata 限制；内存状态不跨重启，不新增 history persistence。
+- Alternate screen/input mode/cursor 在正常退出、Ctrl+C、:q 与异常时恢复；offline controller/keyboard/render/host/integration tests 禁止真实 provider。
+- README 提供 fresh install/configure/build/start 和 keyboard workflow；最终真实 PTY 与授权次数内的 DeepSeek temporary-project smoke 分别记录，不冒充远程 CI。
+
+状态与验收 evidence 以本地实现报告和 Chief Architect final review 为准，不以开发完成自动宣称 v0.2 closed。
+
+## 后续版本 — future / deferred
+
+自动 apply、多文件自主修改、autonomous repository exploration、shell/tests/Git execution、Tool/loop、runtime/executor、Session/conversation persistence、streaming、retry/fallback、routing/registry、memory、MCP、LSP、browser GUI、HTTP server/daemon、IDE、remote execution、accounts/cloud sync/telemetry、Electron/Tauri、collaboration 与 npm publishing 均未批准。不提前设计这些能力的 API。

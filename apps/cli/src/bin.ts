@@ -2,7 +2,9 @@
 import { runCli } from "./index";
 
 try {
-  const result = await runCli(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const apiKey = args[0] === "edit" ? process.env.DEEPSEEK_API_KEY : undefined;
+  const result = await runCli(args, apiKey);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

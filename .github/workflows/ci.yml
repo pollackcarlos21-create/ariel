@@ -21,4 +21,5 @@ jobs:
       - run: bun run lint
       - run: bun run format:check
       - run: bun test
+      - run: bun run test:tui
       - run: bun run build

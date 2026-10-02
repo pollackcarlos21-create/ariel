@@ -19,12 +19,17 @@ const workspaces: Record<string, { directory: string; allowed: string[] }> = {
     directory: "apps/cli",
     allowed: ["@ariel/core", "@ariel/local-host"],
   },
+  "@ariel/tui": {
+    directory: "apps/tui",
+    allowed: ["@ariel/local-host"],
+  },
 };
 
 interface Manifest {
   name: string;
   type: string;
-  exports: Record<string, string>;
+  private: boolean;
+  exports?: Record<string, string>;
   workspaces?: string[];
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
@@ -52,9 +57,7 @@ function dependencyIssues(
       if (version !== "workspace:*")
         issues.push(`Internal dependency must use workspace:*: ${dependency}`);
     } else if (name === "@ariel/core") {
-      issues.push(
-        `Core must remain dependency-free in this milestone: ${dependency}`,
-      );
+      issues.push(`Core must remain dependency-free: ${dependency}`);
     }
   }
   return issues;
@@ -124,8 +127,24 @@ function sourceIssues(
       isBuiltin(specifier) ||
       specifier === "bun" ||
       specifier.startsWith("bun:")
-    )
+    ) {
+      if (
+        name === "@ariel/tui" &&
+        (specifier === "fs" ||
+          specifier.startsWith("fs/") ||
+          specifier === "node:fs" ||
+          specifier.startsWith("node:fs/") ||
+          specifier === "child_process" ||
+          specifier === "node:child_process" ||
+          specifier === "bun" ||
+          specifier.startsWith("bun:"))
+      ) {
+        issues.push(
+          `TUI cannot import filesystem or shell implementations: ${specifier}`,
+        );
+      }
       return;
+    }
     const packageName = specifier.startsWith("@")
       ? specifier.split("/").slice(0, 2).join("/")
       : specifier.split("/")[0];
@@ -140,6 +159,30 @@ function sourceIssues(
       node.text === "Bun"
     ) {
       issues.push("Core cannot reference the Bun runtime");
+    }
+    if (
+      (name === "@ariel/tui" || name === "@ariel/providers") &&
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === "env" &&
+      ((ts.isIdentifier(node.expression) &&
+        node.expression.text === "process") ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.name.text === "process"))
+    ) {
+      issues.push(
+        "Credentials and configuration must be supplied explicitly, not read from process.env",
+      );
+    }
+    if (name === "@ariel/tui" && ts.isPropertyAccessExpression(node)) {
+      const receiver = node.expression;
+      if (
+        ["file", "write", "spawn", "spawnSync"].includes(node.name.text) &&
+        ((ts.isIdentifier(receiver) && receiver.text === "Bun") ||
+          (ts.isPropertyAccessExpression(receiver) &&
+            receiver.name.text === "Bun"))
+      ) {
+        issues.push("TUI cannot perform direct filesystem or shell operations");
+      }
     }
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -191,7 +234,7 @@ function sourceIssues(
   return issues;
 }
 
-test("exactly four workspaces with explicit source entry points and an acyclic dependency graph", () => {
+test("exactly five workspaces with explicit boundaries and an acyclic dependency graph", () => {
   expect(readManifest(".").workspaces?.sort()).toEqual(
     Object.values(workspaces)
       .map((workspace) => workspace.directory)
@@ -202,6 +245,7 @@ test("exactly four workspaces with explicit source entry points and an acyclic d
     const manifest = readManifest(workspace.directory);
     expect(manifest.name).toBe(name);
     expect(manifest.type).toBe("module");
+    expect(manifest.private).toBe(true);
     expect(manifest.exports).toEqual({ ".": "./src/index.ts" });
     const dependencies = {
       ...manifest.dependencies,
@@ -253,6 +297,37 @@ for (const [name, workspace] of Object.entries(workspaces)) {
   });
 }
 
+test("TUI owns React terminal types while core keeps its ES-only configuration", () => {
+  const directory = resolve(root, "apps/tui");
+  const config = ts.readConfigFile(
+    resolve(directory, "tsconfig.json"),
+    ts.sys.readFile,
+  );
+  expect(config.error).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    directory,
+  );
+  expect(parsed.errors).toEqual([]);
+  expect(parsed.options.strict).toBe(true);
+  expect(parsed.options.jsx).toBe(ts.JsxEmit.ReactJSX);
+  expect(parsed.options.types).toEqual(["bun", "react"]);
+  expect(parsed.options.lib).toEqual(["lib.es2022.d.ts"]);
+  const coreConfig = ts.readConfigFile(
+    resolve(root, "packages/core/tsconfig.json"),
+    ts.sys.readFile,
+  );
+  expect(coreConfig.error).toBeUndefined();
+  const parsedCore = ts.parseJsonConfigFileContent(
+    coreConfig.config,
+    ts.sys,
+    resolve(root, "packages/core"),
+  );
+  expect(parsedCore.options.types).toEqual([]);
+  expect(parsedCore.options.lib).toEqual(["lib.es2022.d.ts"]);
+});
+
 describe("architecture guard regression cases", () => {
   test.each([
     ["@ariel/core", 'import "@ariel/providers";'],
@@ -279,6 +354,22 @@ describe("architecture guard regression cases", () => {
     ["@ariel/providers", 'import core = require("@ariel/core");'],
     ["@ariel/providers", "await import(target);"],
     ["@ariel/core", '/// <reference types="bun" />\nexport {};'],
+    ["@ariel/core", 'import "@ariel/tui";'],
+    ["@ariel/cli", 'import "@ariel/tui";'],
+    ["@ariel/tui", 'import "@ariel/providers";'],
+    ["@ariel/tui", 'import "@ariel/core";'],
+    ["@ariel/tui", 'import "@ariel/cli";'],
+    ["@ariel/tui", 'import "@ariel/local-host/src/index.ts";'],
+    ["@ariel/tui", 'import "../../../packages/local-host/src/index.ts";'],
+    ["@ariel/tui", 'import "node:fs";'],
+    ["@ariel/tui", 'import "fs/promises";'],
+    ["@ariel/tui", 'import "node:child_process";'],
+    ["@ariel/tui", 'import "bun";'],
+    ["@ariel/tui", 'Bun.file("file.ts");'],
+    ["@ariel/tui", 'Bun.write("file.ts", "new text");'],
+    ["@ariel/tui", 'globalThis.Bun.spawn(["sh"]);'],
+    ["@ariel/tui", "process.env.DEEPSEEK_API_KEY;"],
+    ["@ariel/providers", "process.env.DEEPSEEK_API_KEY;"],
   ])("rejects forbidden source in %s: %s", (name, source) => {
     const workspace = workspaces[name];
     if (!workspace) throw new Error(`Unknown workspace: ${name}`);
@@ -301,6 +392,12 @@ describe("architecture guard regression cases", () => {
     expect(
       dependencyIssues("@ariel/core", { "provider-sdk": "1.0.0" }),
     ).not.toEqual([]);
+    expect(
+      dependencyIssues("@ariel/tui", { "@ariel/providers": "workspace:*" }),
+    ).not.toEqual([]);
+    expect(
+      dependencyIssues("@ariel/cli", { "@ariel/tui": "workspace:*" }),
+    ).not.toEqual([]);
   });
 
   test("allows CLI to import its own package.json outside src", () => {
@@ -310,6 +407,17 @@ describe("architecture guard regression cases", () => {
         resolve(root, "apps/cli/src/index.ts"),
         'import { version } from "../package.json";',
         {},
+      ),
+    ).toEqual([]);
+  });
+
+  test("allows declared terminal libraries and explicit host composition", () => {
+    expect(
+      sourceIssues(
+        "@ariel/tui",
+        resolve(root, "apps/tui/src/probe.tsx"),
+        'import { render } from "ink"; import { useState } from "react"; import { openProjectFiles } from "@ariel/local-host"; import process from "node:process";',
+        { ink: "7.1.1", react: "19.3.0", "@ariel/local-host": "workspace:*" },
       ),
     ).toEqual([]);
   });

@@ -4,7 +4,7 @@ Contract review date: 2026-10-01
 
 本文件记录 Chief Architect 已批准的第一个真实 provider implementation contract，适用范围是 DeepSeek 的单次、非流式、纯文本输入到完整 final text 输出。它不是通用 Provider framework。
 
-M005 记录契约；M006 Phase 1 已实现 `createDeepSeekModelPort(config)` 和 local-host 的 `runDeepSeekModelRequest(request, config)`，并通过 mocked fetch 离线验证。2026-10-02 已完成一次明确授权的真实 DeepSeek smoke integration，记录见 [Real integration verification](#real-integration-verification)。`createInMemoryModelPort()` 保留，现有 CLI `model-demo` 仍是 in-memory simulation，没有 production env reading 或新 CLI command。
+M005 记录契约；M006 Phase 1 实现 `createDeepSeekModelPort(config)` 和 local-host 的 `runDeepSeekModelRequest(request, config)`，并通过 mocked fetch 离线验证。2026-10-02 完成一次明确授权的真实 generic model smoke integration，记录见 [Real integration verification](#real-integration-verification)。M009 后续批准 proposal-only `ariel edit`；v0.2 terminal composition 同样从启动环境读取 credential，经 local-host 复用 core proposeCodeEdit 与既有 adapter，TUI 不直接创建 provider。in-memory model-demo 与 provider 本身不读取 env 的边界保留。用户入口见 [ADR-009](decisions/ADR-009-first-user-facing-code-edit-cli.md) 与 [ADR-010](decisions/ADR-010-terminal-native-tui-boundary.md)。
 
 外部 DeepSeek API 会变化。M006 实现前以及官方 API 发生变化时，必须重新核验本文使用的 endpoint、model identifier、模式、response schema 和错误行为；不能将本次文档快照视为永久的 provider 保证。
 
@@ -73,7 +73,7 @@ export function createDeepSeekModelPort(
 - `timeoutMs` 必须显式提供，且为 integer milliseconds in the inclusive range `1..2147483647`：`Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 2_147_483_647`。
 - 上限是 Bun 1.4.2 / Node-compatible single `setTimeout` 的 host-runtime representability bound，不是 Ariel product timeout policy、默认值或推荐值。内部 `MAX_TIMEOUT_MS` 不导出，也不进入 core。
 - 越界、fractional、NaN 或 infinite 值在 factory 构造阶段同步 fail-fast；不 clamp，不采用 chunked long timer、递归 timer 或 scheduler abstraction。
-- Chief Architect 尚未冻结任何具体默认 timeout。local-host 仍显式传入配置，provider 不提供隐藏默认值。
+- M006 本身没有批准默认 timeout；M009 code-edit workflow 后续批准 host-level product default `120000ms`，local-host 显式传给 factory。Provider 仍无隐藏默认 timeout；generic runDeepSeekModelRequest 仍接收显式 config。
 - `baseUrl` 不进入 config；M006 固定官方 HTTPS endpoint，不允许自动 redirect 到其他 endpoint。
 
 非法配置在任何 fetch attempt 前同步抛出安全、固定文本的 `TypeError`。API key 必须为 non-empty、非 whitespace-only string；trim 仅用于判空，实际 key 不改写。model 在 runtime 也必须精确为 `deepseek-flash`。这些是构造/装配阶段的配置失败，不是 ModelResult provider failure，不新增 core config error type。
@@ -156,6 +156,8 @@ Unexpected programming error 继续 throw/reject。不得 blanket catch 所有 e
 
 Provider failure message 必须由 adapter 生成安全文本。不得直接透传 Authorization、raw request headers、API key、complete provider error body 或 complete upstream exception object；不要把 request/config secret 加进新建异常、日志或 fixture。保留 TLS 验证，不启用会输出 credential 的 transport diagnostics。
 
+Code-edit host composition 可通过私有 wrapper 观察固定 adapter failure message，以精确 allowlist 重新生成 host 自有诊断文字，供 TUI 区分 HTTP status、timeout、network 与响应格式失败。未知 message 不透传；core 仍返回 model-failure，TUI 只映射已知 host 诊断，CLI 保留通用失败文字。此观察不新增字段、日志、重试或网络请求，不 catch 未知异常。
+
 ## Retry 与 redirect
 
 M006 automatic retry = NONE。一次实际进入 adapter 的 `ModelPort.generateText()` 对应 one attempted DeepSeek generation HTTP request；core validation 拒绝的输入不调用 port，也不发送 HTTP。
@@ -178,11 +180,12 @@ Streaming 继续 DEFER。M006 只批准 non-streaming JSON response，不创建 
 
 ## Secret ownership
 
-| 层 | M006 ownership |
+| 层 | 当前 ownership |
 | --- | --- |
-| CLI | presentation；不读取 `--api-key`，不承担 credential parsing |
+| CLI | presentation；M009 executable edit boundary 读取 DEEPSEEK_API_KEY，不提供 `--api-key` |
+| 根目录 TUI launcher | 从启动 env 读取 DEEPSEEK_API_KEY，显式经 TUI 传给 local-host；不在交互界面输入/存储 key，不直接访问 provider |
 | core | 不知道 credential，不读取 `process.env`，不把 secret 放入 ModelRequest |
-| local-host | 接收显式 config 并传给 provider factory；Phase 1 不读取 env。未来配置来源与实际 timeout policy 需单独授权 |
+| local-host | generic operation 接收显式 config；CLI/TUI task workflow 接收显式 key，装配固定 model 和 120000ms policy；不自行读取 env |
 | providers | 接收 key，构造 Authorization header，知道 DeepSeek endpoint，执行 HTTP 与 wire mapping |
 
 Provider 不自行隐藏读取 `process.env` 获取 credential。真实 API key 不进入 Git、test fixture 或 CLI stderr；离线测试只用明显 fake credential。M006 Phase 1 不实现 env reading 或配置持久化，不读取真实 API key。
@@ -216,7 +219,7 @@ Transport tests 使用隔离的测试替身，不增加生产 failure switch、m
 
 Integration verification 不断言固定自然语言答案，不打印 key，不在默认安装、测试或 CI 中隐式联网。没有真实 integration evidence 时，M006 不得声称真实 DeepSeek connection 已完成验证。
 
-本 contract 不批准新 CLI command，也不允许把现有 in-memory `model-demo` 静默改成真实模型调用；真实 adapter 可以先由明确授权的 integration verification 驱动。
+M005/M006 provider contract 本身不批准新 CLI command，也不把 in-memory model-demo 静默改成真实模型调用。M009 单独通过 ADR-009 批准具名 edit workflow；model-demo 仍离线。未来任何 live verification 仍需显式授权，不进入默认 CI。
 
 ## Real integration verification
 
@@ -236,7 +239,7 @@ Integration verification 不断言固定自然语言答案，不打印 key，不
 | Working tree after verification | clean；`git status --short` 无输出 |
 | Credential lifecycle | 临时使用，未写入文件、Git、测试或日志；运行结束后 `DEEPSEEK_API_KEY` 已从 shell unset |
 
-`180000ms` 仅是该次 verification invocation 显式传入的值，不是 default timeout、recommended timeout 或 product policy；local-host 仍必须显式提供 `timeoutMs`。
+`180000ms` 仅是该次 verification invocation 显式传入的值，不是 default timeout、recommended timeout 或 product policy；该 generic model operation 仍必须显式提供 timeoutMs。M009 的 `120000ms` host product default 是后续独立批准的 edit workflow policy，不改写这条历史记录。
 
 该次成功验证了 production adapter 访问真实官方 endpoint、credential authentication、`deepseek-flash` request 被接受，以及 non-streaming + thinking disabled 调用成功。真实 response 通过当前 runtime validator，final content 映射为 `ModelResult.completed`，local-host → core → provider 的真实调用路径得到验证。
 
@@ -246,11 +249,11 @@ Integration verification 不断言固定自然语言答案，不打印 key，不
 
 ## 与 ADR 的关系及延期范围
 
-本 contract 是 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md) 已批准 provider boundary 的具体实现约束，没有改变 workspace dependency direction、core ModelResult semantics 或 runtime lifecycle abstraction，因此不创建 ADR-008。
+本 contract 是 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md) 已批准 provider boundary 的具体实现约束，没有改变 workspace dependency direction、core ModelResult semantics 或 runtime lifecycle abstraction；M006 provider 实现本身未新增 ADR。后续 ADR-008 记录独立 application task contract，ADR-009 记录首个 user-facing workflow。
 
 未来若增加 core cancellation、public usage、public model identity、provider-neutral lifecycle 或 generic retry/fallback，再重新判断是否需要新 ADR。Agent execution 的定义与延期见 [ADR-007](decisions/ADR-007-agent-execution-semantics-and-deferral.md)。
 
-本 contract 不批准 AgentRequest、AgentResult、AgentExecutor、executeAgentRequest、ExecutionContext、Session、Conversation、TurnId、history/persistence、Tools、Agent Loop、memory、multi-agent、registry/routing、fallback、token budgeting、cost accounting、MCP、server、TUI 或 IDE。`requestModelText()` 保持 generic，ApplicationStatus 仍为 `{ agentExecution: "not-implemented" }`。
+本 provider contract 不批准 AgentRequest、AgentResult、AgentExecutor、executeAgentRequest、ExecutionContext、Session、Conversation、TurnId、history/persistence、Tools、Agent Loop、memory、multi-agent、registry/routing、fallback、token budgeting、cost accounting、MCP、server、TUI 或 IDE。`requestModelText()` 保持 generic。M008 的具名 task 实现单独将 ApplicationStatus 迁移为 `{ agentExecution: "single-source-code-edit-proposal" }`，并非因为接入 provider 自动产生 Agent execution。
 
 ## 官方审查依据
 
