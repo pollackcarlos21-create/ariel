@@ -80,13 +80,13 @@
 
 ## Milestone 006 — DeepSeek Model Adapter Implementation
 
-状态：Planned；尚未开始。
+状态：离线实现已完成并通过本地测试；真实 DeepSeek integration verification 尚未执行，因此 milestone 尚未关闭。
 
-范围：只实现 [DeepSeek implementation contract](DEEPSEEK.md) 所批准的单轮、非流式纯文本路径。实现前重新核验官方 API；不新增永久 demo command，不改变现有 in-memory demo。
+范围：只实现 [DeepSeek implementation contract](DEEPSEEK.md) 所批准的单轮、非流式纯文本路径。Phase 1 仅实现代码与完全离线测试，不读取真实 API key 或调用真实 endpoint；不新增永久 demo command，不改变现有 in-memory demo。
 
 验收目标：
 
-- 固定官方 HTTPS Chat Completions endpoint、`deepseek-flash`、thinking disabled、stream false，使用 raw fetch；local-host 显式提供 credential、model 与有限正数 timeoutMs。
+- 固定官方 HTTPS Chat Completions endpoint、`deepseek-flash`、thinking disabled、stream false，使用 raw fetch；local-host 显式传入 credential、model 与 `1..2147483647` integer milliseconds 的 timeoutMs，不读取 env。该范围是单个 timer 的 host-runtime bound，不是默认 timeout 或 product policy；越界和 fractional 配置 fail-fast，不 clamp 或分段计时。
 - 保持 M004 core public contract，严格映射完整 final text 与预期 provider failures，保留 unexpected throw/reject；不自动 retry，不跟随 redirect，不暴露 reasoning。
 - Deadline 覆盖连接、等待与 body consumption，到期实际 abort transport 并清理 timer；不将 `Promise.race()` 等同于 cancellation。
 - Pure mapping 与 transport/request tests 进入普通 CI，禁止真实网络；真实 integration verification 只能在提供 credential 并明确授权后 opt-in，不进入默认 CI。

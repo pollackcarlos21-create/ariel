@@ -4,7 +4,7 @@ Contract review date: 2026-10-01
 
 本文件记录 Chief Architect 已批准的第一个真实 provider implementation contract，适用范围是 DeepSeek 的单次、非流式、纯文本输入到完整 final text 输出。它不是通用 Provider framework。
 
-这是 M006 的已批准实现方向。M005 只记录契约；当前 providers 仍只有 `createInMemoryModelPort()`，没有 DeepSeek adapter、HTTP 调用、credential/config 读取或真实 integration evidence。现有 CLI `model-demo` 仍是 in-memory simulation。
+M005 记录契约；M006 Phase 1 已实现 `createDeepSeekModelPort(config)` 和 local-host 的 `runDeepSeekModelRequest(request, config)`，并通过 mocked fetch 离线验证。`createInMemoryModelPort()` 保留，现有 CLI `model-demo` 仍是 in-memory simulation。尚未执行真实 DeepSeek integration verification，没有真实 API response evidence，也没有 production env reading 或新 CLI command。
 
 外部 DeepSeek API 会变化。M006 实现前以及官方 API 发生变化时，必须重新核验本文使用的 endpoint、model identifier、模式、response schema 和错误行为；不能将本次文档快照视为永久的 provider 保证。
 
@@ -34,7 +34,7 @@ Contract review date: 2026-10-01
 
 Adapter 不得 trim、rewrite、拼接 system/user，或加入隐藏的 provider-owned Ariel product prompt。core 原有空白 userText validation 不变；合法 request 的文本继续原样交给 port。发送 system message 不承诺模型一定遵从 instruction，也不承诺不同 model 的行为一致。
 
-固定 request body 行为如下；这是设计示例，不是 M005 实际发送的请求：
+固定 request body 行为如下；这是请求结构示例，不是真实 API 调用记录：
 
 ```json
 {
@@ -52,25 +52,31 @@ Adapter 不得 trim、rewrite、拼接 system/user，或加入隐藏的 provider
 
 ## Provider configuration
 
-未来 M006 的最小 config 设计为：
+`@ariel/providers` 公共入口导出以下 config 与 factory：
 
 ```ts
-interface DeepSeekModelPortConfig {
+export interface DeepSeekModelPortConfig {
   readonly apiKey: string;
   readonly model: "deepseek-flash";
   readonly timeoutMs: number;
 }
+
+export function createDeepSeekModelPort(
+  config: DeepSeekModelPortConfig,
+): ModelPort;
 ```
 
-这段声明仅用于记录设计，当前没有对应生产 TypeScript API。
+实现位于 `packages/providers/src/deepseek.ts`；response mapping 和 transport 细节不作为公共 API 导出。local-host 的 `runDeepSeekModelRequest(request: ModelRequest, config: DeepSeekModelPortConfig): Promise<ModelResult>` 只创建 port 并调用 core `requestModelText`，不重复 validation 或改写 prompt。
 
 - `apiKey` 必须显式提供，没有默认值，由 local-host 提供，永不进入 core 或 ModelRequest。
 - `model` 必须显式提供；M006 只批准 `deepseek-flash`，不批准任意 model、隐式选模、registry 或 routing。
-- `timeoutMs` 必须显式提供，且为 finite positive number；provider 不提供隐藏默认值。
-- Chief Architect 尚未冻结任何具体 timeout 数值。local-host 在未来任务批准的 policy 下选择数值，本文不指定默认值。
+- `timeoutMs` 必须显式提供，且为 integer milliseconds in the inclusive range `1..2147483647`：`Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 2_147_483_647`。
+- 上限是 Bun 1.4.2 / Node-compatible single `setTimeout` 的 host-runtime representability bound，不是 Ariel product timeout policy、默认值或推荐值。内部 `MAX_TIMEOUT_MS` 不导出，也不进入 core。
+- 越界、fractional、NaN 或 infinite 值在 factory 构造阶段同步 fail-fast；不 clamp，不采用 chunked long timer、递归 timer 或 scheduler abstraction。
+- Chief Architect 尚未冻结任何具体默认 timeout。local-host 仍显式传入配置，provider 不提供隐藏默认值。
 - `baseUrl` 不进入 config；M006 固定官方 HTTPS endpoint，不允许自动 redirect 到其他 endpoint。
 
-非法配置应在网络操作前 fail-fast。API key 缺失属于构造/装配阶段的配置失败，不是已经执行的模型 operation 的 provider failure；当前不为此新增 core config error type。
+非法配置在任何 fetch attempt 前同步抛出安全、固定文本的 `TypeError`。API key 必须为 non-empty、非 whitespace-only string；trim 仅用于判空，实际 key 不改写。model 在 runtime 也必须精确为 `deepseek-flash`。这些是构造/装配阶段的配置失败，不是 ModelResult provider failure，不新增 core config error type。
 
 ## Timeout 与 cancellation
 
@@ -80,6 +86,8 @@ interface DeepSeekModelPortConfig {
 | Transport deadline | REQUIRED FOR M006 |
 
 Deadline 必须覆盖完整 HTTP operation，包括连接、等待和完整 body consumption；到期真正 abort transport，并在所有结束路径清理 timer。DeepSeek non-streaming keep-alive 空行不能重置 Ariel total deadline。
+
+每次 `generateText` 创建独立 `AbortController`，在 fetch 前启动单个 `setTimeout(() => controller.abort(), timeoutMs)`。完整 `response.text()` 读取完成后才进行 HTTP status 和 JSON mapping；最外层 `finally` 清理 timer，覆盖成功、HTTP/body/network failure、timeout、parse/schema failure 与 unexpected exception。
 
 不得仅用 `Promise.race()` 提前结束等待来冒充 transport cancellation。丢弃 Promise 或停止 await 不等于取消请求；process exit 也不能替代 embeddable API cancellation。
 
@@ -98,6 +106,8 @@ Deadline 必须覆盖完整 HTTP operation，包括连接、等待和完整 body
 - `content` 是 string；
 - `finish_reason === "stop"`；
 - no actual tool call output。
+
+Required envelope validation 检查 string `id`、`object === "chat.completion"`、integer `created`、string `model`、string `system_fingerprint` 与 `choices`；choice 检查 integer `index`、nullable object `logprobs`、message、role、content 和 finish_reason。外部 JSON 先作为 `unknown`，通过 runtime narrowing 检查；不以类型断言信任 response。model 和 fingerprint 不进入 core result，usage 不参与 completion 判断。
 
 Text 原样返回。`content === ""` 和 whitespace-only string 都是合法 completed text；不得 trim，也不得把它们自动改成 error。`tool_calls` 缺失或空数组可表示无工具输出，存在但结构异常仍属于无效 response。
 
@@ -142,6 +152,8 @@ DeepSeek 400/422 不重新解释成 core `invalid-request`。映射不依赖 pro
 
 Unexpected programming error 继续 throw/reject。不得 blanket catch 所有 exception 后全部改成 `provider-failure`；外部 parse/schema/transport failure 与 adapter bug 必须区分。core、local-host 与 runCli 保持 unexpected error 传播，现有 `bin.ts` 继续承担最外层 process boundary。
 
+当前 transport catch 仅围绕 fetch 和 body consumption，识别 `TypeError`、`DOMException` 的 `AbortError` 及 adapter 自身的 abort reason；未知 error 原样传播，不猜测其他 runtime error classes。JSON parsing 只将 `SyntaxError` 转为安全失败。离线 mock 验证这些分支，不代表真实 DNS/connect/TLS 错误形态已经实测。
+
 Provider failure message 必须由 adapter 生成安全文本。不得直接透传 Authorization、raw request headers、API key、complete provider error body 或 complete upstream exception object；不要把 request/config secret 加进新建异常、日志或 fixture。保留 TLS 验证，不启用会输出 credential 的 transport diagnostics。
 
 ## Retry 与 redirect
@@ -156,7 +168,7 @@ HTTP redirect 必须拒绝，不能自动跟随到未批准 endpoint。Transport
 
 Configured/requested model identity 在 adapter config 内明确为 `deepseek-flash`。Provider-reported response identity 继续 DEFER from core contract，不新增 `ModelResult.model`；不得把 request identifier 和 reported identity 当作同一种事实或不可变模型版本保证。
 
-Usage 继续 DEFER from core contract，不新增 ModelUsage、token fields 或 cost fields。未来 M006 adapter 可以丢弃 usage metadata。
+Usage 继续 DEFER from core contract，不新增 ModelUsage、token fields 或 cost fields。当前 DeepSeek adapter 丢弃 usage metadata。
 
 未来 integration verification 可以观察 reported identity 和 usage，但它们只作为验证 evidence，不代表公共 API 已批准。Missing usage 表示 unknown，不能填成 `0`，也不能用字符估算冒充 provider token facts。
 
@@ -170,14 +182,14 @@ Streaming 继续 DEFER。M006 只批准 non-streaming JSON response，不创建 
 | --- | --- |
 | CLI | presentation；不读取 `--api-key`，不承担 credential parsing |
 | core | 不知道 credential，不读取 `process.env`，不把 secret 放入 ModelRequest |
-| local-host | 未来从明确配置来源读取 `DEEPSEEK_API_KEY`，显式传给 provider factory，并提供 model/timeout policy |
+| local-host | 接收显式 config 并传给 provider factory；Phase 1 不读取 env。未来配置来源与实际 timeout policy 需单独授权 |
 | providers | 接收 key，构造 Authorization header，知道 DeepSeek endpoint，执行 HTTP 与 wire mapping |
 
-Provider 不自行隐藏读取 `process.env` 获取 credential。API key 不进入 Git、test fixture 或 CLI stderr。M005 不实现 env reading、API key handling 或配置持久化。
+Provider 不自行隐藏读取 `process.env` 获取 credential。真实 API key 不进入 Git、test fixture 或 CLI stderr；离线测试只用明显 fake credential。M006 Phase 1 不实现 env reading 或配置持久化，不读取真实 API key。
 
 ## M006 test contract
 
-M006 必须提供三层验证：
+M006 的验证分为三层；Phase 1 已实现前两层，第三层尚未执行：
 
 | 层 | 范围 | 执行边界 |
 | --- | --- | --- |
@@ -199,6 +211,8 @@ M006 必须提供三层验证：
 - unexpected programming error 不被伪装成 provider-failure。
 
 Transport tests 使用隔离的测试替身，不增加生产 failure switch、magic prompt、隐藏命令或 generic injection framework。Fixtures 不含真实 credential，测试失败诊断也不能打印 key。
+
+`tests/deepseek-model.test.ts` 从 `@ariel/providers` 和 `@ariel/local-host` 公共入口验证 mapping 与 composition，使用 `describe.serial` 和每个测试独立恢复的 global fetch spy。普通测试不访问真实网络。timeout config tests 覆盖整数边界、fractional 与 overflow 拒绝；上限只验证 factory construction，不启动长 timer。
 
 Integration verification 不断言固定自然语言答案，不打印 key，不在默认安装、测试或 CI 中隐式联网。没有真实 integration evidence 时，M006 不得声称真实 DeepSeek connection 已完成验证。
 

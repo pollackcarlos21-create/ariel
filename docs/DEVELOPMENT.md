@@ -90,6 +90,14 @@ bun apps/cli/dist/bin.js model-demo "a" "b"
 
 model contract 测试用小型手写 ModelPort 验证调用次数、原始 request 的同一性、systemText 保留、结果原样返回、空白输入不调用 port、空 completed text 和结构化 provider-failure。意外 throw/reject 不应被伪装成成功。adapter/composition 测试直接调用真实 in-memory adapter 与 local-host，检查输入相关的确定性输出，不需要 API key、环境变量或配置 setup。in-memory adapter 不解释 systemText；该字段的原样传递在 core boundary 测试中验证。无需 module mock、全局状态、通用 contract test framework 或 DI container。
 
+## DeepSeek 离线开发与验证
+
+`@ariel/providers.createDeepSeekModelPort(config)` 和 `@ariel/local-host.runDeepSeekModelRequest(request, config)` 已有 production 实现，CLI 仍保持 in-memory demo。config 显式提供 fake/real credential、固定 model 和 timeout；production code 不读取 env。`timeoutMs` 必须为 `1..2147483647` 的整数毫秒，非法配置在 factory 同步 fail-fast；这是 Bun single-timer 的表达范围，没有默认 timeout，不 clamp 或分段计时。
+
+`tests/deepseek-model.test.ts` 通过公共入口，用 deterministic response fixtures 和 test-local global fetch spy 验证配置、精确 request mapping、required response structure、completion/error mapping、独立 deadline 与 composition。该组使用 `describe.serial`，每次测试恢复 fetch，禁止真实网络、真实 credential 或 production test hook。deadline tests 分别验证 headers 前和 body consumption 期间实际 abort，以及结束后的 timer cleanup；上限配置测试只构造 factory，不等待长 timer。
+
+普通 `bun test` 包含这些离线测试。真实 DeepSeek integration verification 尚未执行，也没有默认运行的 live test；只能在 Chief Architect 单独授权并显式提供 credential 后进行，不进入默认 CI。离线通过不代表实际连接、真实 DNS/TLS failure classification、服务端取消或计费行为已验证。未来 live verification 不打印 key、Authorization、完整 provider body 或请求文本，不断言固定自然语言答案。
+
 ## 包解析与边界
 
 跨包使用 `@ariel/core` 等公共包名，不直接导入其他 workspace 的 `src`。包内源码入口直接供 Bun 和 TypeScript 解析，因此测试不依赖预先 build；所有包当前都为 private，不发布。

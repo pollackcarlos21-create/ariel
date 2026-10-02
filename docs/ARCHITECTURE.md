@@ -7,8 +7,8 @@
 | Workspace | 路径 | 已批准的职责 | 当前实现 |
 | --- | --- | --- | --- |
 | `@ariel/core` | `packages/core` | 可嵌入、宿主和前端无关的核心 | application status query、model interaction contract 与 `requestModelText` |
-| `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | `createInMemoryModelPort()` 提供确定性的离线 echo adapter；尚无真实外部模型集成 |
-| `@ariel/local-host` | `packages/local-host` | 本地宿主 adapter 与 composition root | `runInMemoryModelDemo(userText)` 装配 adapter 并调用 core |
+| `@ariel/providers` | `packages/providers` | 对接外部模型服务的显式 provider adapter | in-memory echo 与 DeepSeek raw fetch adapter；DeepSeek 仅完成离线验证 |
+| `@ariel/local-host` | `packages/local-host` | 本地宿主 adapter 与 composition root | `runInMemoryModelDemo(userText)` 与显式 config 的 `runDeepSeekModelRequest(request, config)` |
 | `@ariel/cli` | `apps/cli` | 薄 CLI frontend | async `runCli`；默认状态提示、help、version、参数错误及 `model-demo <text>` 的中文 presentation |
 
 允许的直接依赖如下，箭头表示“左侧依赖右侧”，并不表示 core 依赖宿主：
@@ -111,6 +111,18 @@ CLI：runCli(["model-demo", text])
 
 runtime control flow 不等于 source dependency direction。core 调用由 local-host 注入的 ModelPort，不 import providers；providers 从 core 公共入口导入契约。local-host 只创建 adapter、构造 request、调用 core 并返回结果，不负责 validation、prompt policy 或 retry。该链是离线架构验证，不是实际 LLM integration，也不是 Agent execution；ApplicationStatus 不变。决策见 [ADR-006](decisions/ADR-006-minimal-model-interaction-boundary.md)。
 
+### 首个真实 provider：DeepSeek 的离线实现
+
+M005 冻结的 DeepSeek contract 已在 M006 Phase 1 实现：`POST https://api.deepseek.com/chat/completions`，显式选择 `deepseek-flash`、`thinking: { type: "disabled" }` 与 `stream: false`，使用 raw fetch。`@ariel/providers` 导出 `DeepSeekModelPortConfig` 与 `createDeepSeekModelPort(config)`；内部 parser/transport 不导出。具体 mapping 与测试契约见 [DeepSeek implementation contract](DEEPSEEK.md)。
+
+local-host 的 `runDeepSeekModelRequest(request, config)` 只创建 DeepSeek port、调用 core `requestModelText` 并返回结果，不读取 env、增加 prompt 或重复 validation。config 显式携带 credential、model 和 timeout；CLI 仍只调用 in-memory demo。真实 DeepSeek integration verification 尚未执行，离线测试通过不等于真实连接已经验证。
+
+Deadline 覆盖完整 HTTP operation、到期实际 abort transport，并在所有结束路径清理 timer。`timeoutMs` 只接受 `1..2147483647` 的整数毫秒；上限是 Bun 单个 timer 的 host-runtime representability bound，不是 product policy、默认或推荐 timeout。非法值在 factory 同步 fail-fast，不 clamp，不做 chunked timer。local-host 必须显式传入 timeout，没有隐藏默认值。
+
+Required response envelope 通过 runtime validation；仅完整 `stop`、assistant string content、无实际 tool output 时返回 completed，保留 empty/whitespace text。预期 transport/HTTP/JSON/schema/completion failures 使用安全的 provider-failure 文本；未知 programming error 继续传播。没有 retry 或 redirect，没有 env reading、公开 cancellation、usage、reported identity 或 reasoning exposure。
+
+ADR-006 要求的首次真实 provider 前 cancellation、model identity、usage 审查已在 M005 完成，core public contract 的延期决定不变。上述实现属于 ADR-006 provider boundary 的具体落实，没有改变 dependency direction、core result semantics 或 runtime lifecycle abstraction，不新增 ADR-008；未来公共契约或 lifecycle 变化再判断是否需要新 ADR。
+
 ### Agent execution 语义与延期
 
 Agent execution 是 application 接受一个已定义任务，按照 application-owned policy 处理它，并对本次运行的 completion / failure semantics 负责；model call 是其中的实现能力之一。
@@ -125,7 +137,7 @@ CLI 拥有 presentation；local-host 拥有 composition 与 host facts；未来 
 
 core 禁止 Bun.file、Bun.spawn、bun:sqlite、CLI/TTY 逻辑、provider SDK、HTTP server、数据库具体实现、文件系统具体实现、shell 具体实现。当前 core 不引入外部依赖。
 
-core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不注入 Bun、Node 或 DOM 全局类型；CLI、local-host 和测试可以使用 Bun 类型。core 使用 browser build target 作为额外的宿主模块检查，不代表当前实现了浏览器产品。
+core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不注入 Bun、Node 或 DOM 全局类型；CLI、local-host、providers implementation 和测试可以使用 Bun 类型。providers 的 `types: ["bun"]` 支持 fetch、AbortController 和 timer，不改变 base/core 配置或 core public contract。core 使用 browser build target 作为额外的宿主模块检查，不代表当前实现了浏览器产品。
 
 架构测试检查 manifest 中各类依赖、workspace 图是否有环，以及 src 中 import、export-from、import type 和字面量 dynamic import 的边界。跨包相对路径、深层包导入、require、非字面量 dynamic import、triple-slash 类型注入均被拒绝。反例测试验证门禁会拒绝实际违规模式。
 
@@ -140,21 +152,11 @@ core 独立执行类型检查，仅启用 ES2022 标准库，`types: []`，不�
 - local-host 是 composition root，负责装配核心和具体 adapter，承载本地宿主实现。
 - CLI 负责入口和用户交互，将业务委托给核心及 local-host，不承载核心逻辑。
 
-当前已实现 CLI 直接调用 core application status query，以及 local-host 装配 in-memory adapter 的 model demo。真实外部模型接入和资源生命周期尚未实现；不因此创建 generic application/runtime facade 或 composition framework。
-
-### 首个真实 provider：DeepSeek
-
-M005 是 documentation-only contract review；首个真实 provider 的 M006 实现方向已批准为 DeepSeek：`POST https://api.deepseek.com/chat/completions`，显式选择 `deepseek-flash`、`thinking: { type: "disabled" }` 与 `stream: false`，使用 raw fetch。具体 request/response mapping、config、errors、deadline、secret hygiene 与测试要求见 [DeepSeek implementation contract](DEEPSEEK.md)。外部 API 变化或开始实现前必须重新核验官方资料。
-
-这些是已批准的实现约束，不是当前 runtime capability。当前仍未实现真实 provider、HTTP、credential/env reading 或真实 integration；M006 是 planned milestone，不新增 CLI command。
-
-ADR-006 要求的首次真实 provider 前 cancellation、model identity、usage 审查已在 M005 完成：cooperative caller cancellation、reported model identity 与 usage 均继续从 core public contract 延期。M006 必须实现覆盖完整 HTTP operation、到期实际 abort transport 并清理 timer 的 deadline；timeout 数值由 local-host 显式提供，没有已批准的具体默认值。configured model identity 留在 adapter config，streaming 继续延期；不自动 retry，不跟随 HTTP redirect。
-
-当前 DeepSeek protocol/config/mapping 决定属于 ADR-006 provider boundary 的具体实现约束，没有改变 workspace dependency direction、core ModelResult semantics 或 runtime lifecycle abstraction，因此不新增 ADR-008。未来增加 core cancellation、public usage、public model identity、provider-neutral lifecycle 或 generic retry/fallback 时，再判断是否需要新 ADR。
+当前已有 status query、in-memory demo 及显式配置的 DeepSeek adapter/composition 离线实现。DeepSeek 真实 integration verification 仍需提供 credential 并单独授权，不进入默认 CI；不因此创建 generic application/runtime facade 或 composition framework。外部 API 发生变化时必须重新核验协议契约。
 
 ## DEFERRED：尚未实现的能力
 
-真实 DeepSeek provider 与其 auth/config 已有上述 planned 实现约束，但尚未实现。Provider SDK、retry/fallback、conversation、session runtime、tools、permissions、filesystem tools、shell tools、agent loop、context management、memory、multi-agent、patch engine、LSP、MCP 继续延期。
+DeepSeek production env/config loading 与真实 integration verification 尚未实现或执行。Provider SDK、retry/fallback、conversation、session runtime、tools、permissions、filesystem tools、shell tools、agent loop、context management、memory、multi-agent、patch engine、LSP、MCP 继续延期。
 
 当前 ModelPort 使用 `Promise<ModelResult>` 完整结果，不定义 streaming、cancellation、usage 或 model identity 契约，不注入 AbortSignal、ReadableStream 或 DOM lib。M005 审查没有新增这些公共字段或接口；出现 caller cancellation、identity/usage 的真实消费者时重新审核相应契约。首 token UI、用户取消、tool call、multi-block output 或长时真实远程调用出现时，重新审核独立 streaming capability。没有对应空接口或占位目录。
 
