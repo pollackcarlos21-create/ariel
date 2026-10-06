@@ -336,39 +336,46 @@ describe.serial("local-host file code edit composition without network", () => {
       name: "schema",
       message: "DeepSeek code-edit response was unsupported.",
     },
-  ])("returns a safe $name diagnostic without retry", async ({ name, message }) => {
-    const filePath = await sourceFile();
-    if (name === "network") {
-      fetchSpy.mockRejectedValue(new TypeError(`${PRIVATE_MARKER} ${FAKE_KEY}`));
-    } else if (name === "body") {
-      fetchSpy.mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new TypeError(`${PRIVATE_MARKER} ${FAKE_KEY}`));
-            },
-          }),
-        ),
-      );
-    } else {
-      fetchSpy.mockResolvedValue(
-        new Response(name === "JSON" ? PRIVATE_MARKER : "{}"),
-      );
-    }
+  ])(
+    "returns a safe $name diagnostic without retry",
+    async ({ name, message }) => {
+      const filePath = await sourceFile();
+      if (name === "network") {
+        fetchSpy.mockRejectedValue(
+          new TypeError(`${PRIVATE_MARKER} ${FAKE_KEY}`),
+        );
+      } else if (name === "body") {
+        fetchSpy.mockResolvedValue(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(
+                  new TypeError(`${PRIVATE_MARKER} ${FAKE_KEY}`),
+                );
+              },
+            }),
+          ),
+        );
+      } else {
+        fetchSpy.mockResolvedValue(
+          new Response(name === "JSON" ? PRIVATE_MARKER : "{}"),
+        );
+      }
 
-    const result = await runDeepSeekCodeEditFromFile(
-      filePath,
-      INSTRUCTION,
-      FAKE_KEY,
-    );
-    expectSafeFailure(result, "model-failure");
-    expect(result).toEqual({
-      status: "failed",
-      error: { kind: "model-failure", message },
-    });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(await readFile(filePath, "utf8")).toBe(SOURCE);
-  });
+      const result = await runDeepSeekCodeEditFromFile(
+        filePath,
+        INSTRUCTION,
+        FAKE_KEY,
+      );
+      expectSafeFailure(result, "model-failure");
+      expect(result).toEqual({
+        status: "failed",
+        error: { kind: "model-failure", message },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(await readFile(filePath, "utf8")).toBe(SOURCE);
+    },
+  );
 
   test("returns a safe timeout diagnostic after transport abort without retry", async () => {
     const filePath = await sourceFile();
@@ -415,60 +422,87 @@ describe.serial("local-host file code edit composition without network", () => {
     `DeepSeek request timed out. ${FAKE_KEY}`,
     "DeepSeek request failed with HTTP 999.",
     "DeepSeek request failed with HTTP 401.",
-  ])("keeps the core generic failure for untrusted message %j", async (message) => {
-    let calls = 0;
-    const invalidRequest = message === "DeepSeek request failed with HTTP 401.";
-    const factorySpy = spyOn(providers, "createDeepSeekModelPort").mockReturnValue({
-      async generateText(): Promise<ModelResult> {
-        calls += 1;
-        return {
-          status: "failed",
-          error: {
-            kind: invalidRequest ? "invalid-request" : "provider-failure",
-            message,
-          },
-        };
-      },
-    });
-    try {
-      const result = await runDeepSeekCodeEditTask(INSTRUCTION, SOURCE, FAKE_KEY);
-      expectSafeFailure(result, "model-failure");
-      expect(result).toEqual({
-        status: "failed",
-        error: {
-          kind: "model-failure",
-          message: "The model did not return a completed code edit proposal.",
+  ])(
+    "keeps the core generic failure for untrusted message %j",
+    async (message) => {
+      let calls = 0;
+      const invalidRequest =
+        message === "DeepSeek request failed with HTTP 401.";
+      const factorySpy = spyOn(
+        providers,
+        "createDeepSeekModelPort",
+      ).mockReturnValue({
+        async generateText(): Promise<ModelResult> {
+          calls += 1;
+          return {
+            status: "failed",
+            error: {
+              kind: invalidRequest ? "invalid-request" : "provider-failure",
+              message,
+            },
+          };
         },
       });
-      expect(calls).toBe(1);
-      expect(fetchSpy).toHaveBeenCalledTimes(0);
-    } finally {
-      factorySpy.mockRestore();
-    }
-  });
+      try {
+        const result = await runDeepSeekCodeEditTask(
+          INSTRUCTION,
+          SOURCE,
+          FAKE_KEY,
+        );
+        expectSafeFailure(result, "model-failure");
+        expect(result).toEqual({
+          status: "failed",
+          error: {
+            kind: "model-failure",
+            message: "The model did not return a completed code edit proposal.",
+          },
+        });
+        expect(calls).toBe(1);
+        expect(fetchSpy).toHaveBeenCalledTimes(0);
+      } finally {
+        factorySpy.mockRestore();
+      }
+    },
+  );
 
   test("keeps concurrent operation diagnostics independent", async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(PRIVATE_MARKER, { status: 401 }));
-    fetchSpy.mockResolvedValueOnce(new Response(PRIVATE_MARKER, { status: 429 }));
+    fetchSpy.mockResolvedValueOnce(
+      new Response(PRIVATE_MARKER, { status: 401 }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      new Response(PRIVATE_MARKER, { status: 429 }),
+    );
 
     const results = await Promise.all([
       runDeepSeekCodeEditTask(INSTRUCTION, SOURCE, FAKE_KEY),
       runDeepSeekCodeEditTask(INSTRUCTION, SOURCE, FAKE_KEY),
     ]);
 
-    expect(results).toEqual([401, 429].map((status) => ({
-      status: "failed",
-      error: {
-        kind: "model-failure",
-        message: `DeepSeek code-edit request failed (HTTP ${status}).`,
+    expect(results).toEqual([
+      {
+        status: "failed",
+        error: {
+          kind: "model-failure",
+          message: "DeepSeek code-edit request failed (HTTP 401).",
+        },
       },
-    })));
+      {
+        status: "failed",
+        error: {
+          kind: "model-failure",
+          message: "DeepSeek code-edit request failed (HTTP 429).",
+        },
+      },
+    ]);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   test("preserves synchronous unexpected adapter throw identity", async () => {
     const error = new Error("Unexpected synchronous adapter fixture failure.");
-    const factorySpy = spyOn(providers, "createDeepSeekModelPort").mockReturnValue({
+    const factorySpy = spyOn(
+      providers,
+      "createDeepSeekModelPort",
+    ).mockReturnValue({
       generateText() {
         throw error;
       },

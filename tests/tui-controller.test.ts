@@ -17,6 +17,7 @@ import {
   type ModelResult,
   proposeCodeEdit,
 } from "@ariel/core";
+import { parseArielModelConfig } from "@ariel/local-host";
 import {
   createTuiController,
   type TuiController,
@@ -869,6 +870,138 @@ describe.serial(
         }
       },
     );
+
+    test("configured compatible composition sends exact requests without auth and remains usable for a second Generate", async () => {
+      const fakeFetch: typeof fetch = Object.assign(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "stop",
+                  message: {
+                    role: "assistant",
+                    content: JSON.stringify(EDIT),
+                  },
+                },
+              ],
+            }),
+          ),
+        { preconnect: fetch.preconnect },
+      );
+      const transport = spyOn(globalThis, "fetch").mockImplementation(
+        fakeFetch,
+      );
+      try {
+        const controller = createTuiController({
+          initialProjectPath: projectPath,
+          modelConfig: parseArielModelConfig({
+            ARIEL_PROVIDER: "openai-compatible",
+            OPENAI_COMPATIBLE_BASE_URL: "https://offline.example/v1/",
+            OPENAI_COMPATIBLE_MODEL: "offline-qwen",
+          }),
+          // Explicit model config takes priority over legacy DeepSeek convenience.
+          apiKey: "unused-legacy-key",
+        });
+        controllers.push(controller);
+        await proposal(controller);
+        expect(controller.getState()).toMatchObject({
+          providerConfigured: true,
+          providerName: "OpenAI-compatible",
+          busy: false,
+        });
+        controller.rejectProposal();
+        controller.setInstruction("second task");
+        await controller.generateProposal();
+        expect(controller.getState().status).toBe("proposal-ready");
+        expect(transport).toHaveBeenCalledTimes(2);
+        for (const [url, options] of transport.mock.calls) {
+          expect(String(url)).toBe(
+            "https://offline.example/v1/chat/completions",
+          );
+          expect(options?.redirect).toBe("error");
+          expect(new Headers(options?.headers).get("Authorization")).toBeNull();
+          const body = JSON.parse(String(options?.body));
+          expect(body.model).toBe("offline-qwen");
+          expect(body.stream).toBe(false);
+          expect(body).not.toHaveProperty("thinking");
+          expect(JSON.parse(body.messages[1].content).sourceText).toBe(SOURCE);
+        }
+        expect(JSON.stringify(controller.getState())).not.toContain(
+          "offline.example",
+        );
+        expect(
+          await readFile(join(projectPath, "src", "example.ts"), "utf8"),
+        ).toBe(SOURCE);
+      } finally {
+        transport.mockRestore();
+      }
+    });
+
+    test.each([
+      {
+        message: "OpenAI-compatible code-edit request failed (HTTP 401).",
+        expected: "HTTP 401",
+      },
+      {
+        message: "OpenAI-compatible code-edit request failed (HTTP 402).",
+        expected:
+          "OpenAI-compatible 拒绝了请求（HTTP 402），请检查 endpoint 配置。",
+      },
+      {
+        message: "OpenAI-compatible code-edit request timed out.",
+        expected: "120 秒",
+      },
+      {
+        message: `raw body ${FAKE_KEY}`,
+        expected: "OpenAI-compatible 请求失败",
+      },
+    ])(
+      "compatible failure uses exact safe allowlist: $expected",
+      async ({ message, expected }) => {
+        const controller = createTuiController({
+          initialProjectPath: projectPath,
+          modelConfig: parseArielModelConfig({
+            ARIEL_PROVIDER: "openai-compatible",
+            OPENAI_COMPATIBLE_BASE_URL: "https://offline.example/v1",
+            OPENAI_COMPATIBLE_MODEL: "offline-model",
+            OPENAI_COMPATIBLE_API_KEY: FAKE_KEY,
+          }),
+          propose: async () => ({
+            status: "failed",
+            error: { kind: "model-failure", message },
+          }),
+        });
+        controllers.push(controller);
+        await ready(controller);
+        await controller.generateProposal();
+        await controller.confirmPrivacy();
+        expect(controller.getState().error).toContain(expected);
+        expect(JSON.stringify(controller.getState())).not.toContain(FAKE_KEY);
+        expect(controller.getState().busy).toBe(false);
+      },
+    );
+
+    test("DeepSeek HTTP402 retains the documented balance remediation", async () => {
+      const controller = createTuiController({
+        initialProjectPath: projectPath,
+        apiKey: FAKE_KEY,
+        propose: async () => ({
+          status: "failed",
+          error: {
+            kind: "model-failure",
+            message: "DeepSeek code-edit request failed (HTTP 402).",
+          },
+        }),
+      });
+      controllers.push(controller);
+      await ready(controller);
+      await controller.generateProposal();
+      await controller.confirmPrivacy();
+      expect(controller.getState().error).toBe(
+        "DeepSeek 余额不足（HTTP 402），请检查账户余额。",
+      );
+    });
 
     test("production composition uses real adapter with offline fetch fixture and explicit wire config", async () => {
       const transport = spyOn(globalThis, "fetch").mockResolvedValue(

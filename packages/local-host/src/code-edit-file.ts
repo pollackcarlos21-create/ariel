@@ -5,10 +5,11 @@ import {
   type ModelPort,
   proposeCodeEdit,
 } from "@ariel/core";
-import { createDeepSeekModelPort } from "@ariel/providers";
+import {
+  type ArielModelProvider,
+  createConfiguredModelPort,
+} from "./model-config";
 
-// v0.1 host product policy. The provider still requires an explicit timeout.
-const CODE_EDIT_TIMEOUT_MS = 120_000;
 const SAFE_MODEL_FAILURE_MESSAGES = new Map([
   ["DeepSeek request timed out.", "DeepSeek code-edit request timed out."],
   [
@@ -27,15 +28,37 @@ const SAFE_MODEL_FAILURE_MESSAGES = new Map([
     "DeepSeek returned an unsupported response.",
     "DeepSeek code-edit response was unsupported.",
   ],
+  [
+    "OpenAI-compatible request timed out.",
+    "OpenAI-compatible code-edit request timed out.",
+  ],
+  [
+    "OpenAI-compatible network request failed.",
+    "OpenAI-compatible code-edit network request failed.",
+  ],
+  [
+    "OpenAI-compatible response body could not be read.",
+    "OpenAI-compatible code-edit response body could not be read.",
+  ],
+  [
+    "OpenAI-compatible returned invalid JSON.",
+    "OpenAI-compatible code-edit response was not valid JSON.",
+  ],
+  [
+    "OpenAI-compatible returned an unsupported response.",
+    "OpenAI-compatible code-edit response was unsupported.",
+  ],
 ]);
 
 function safeModelFailureMessage(message: string): string | undefined {
-  const httpStatus = /^DeepSeek request failed with HTTP ([1-5]\d{2})\.$/.exec(
-    message,
-  )?.[1];
-  return httpStatus === undefined
-    ? SAFE_MODEL_FAILURE_MESSAGES.get(message)
-    : `DeepSeek code-edit request failed (HTTP ${httpStatus}).`;
+  const match =
+    /^(DeepSeek|OpenAI-compatible) request failed with HTTP ([1-5]\d{2})\.$/.exec(
+      message,
+    );
+  if (match !== null && match[0] === message) {
+    return `${match[1]} code-edit request failed (HTTP ${match[2]}).`;
+  }
+  return SAFE_MODEL_FAILURE_MESSAGES.get(message);
 }
 
 const READ_ERROR_CODES = new Set([
@@ -76,10 +99,10 @@ function fileReadFailure(): FileCodeEditResult {
   };
 }
 
-export async function runDeepSeekCodeEditFromFile(
+export async function runConfiguredCodeEditFromFile(
   filePath: string,
   instruction: string,
-  apiKey: string,
+  provider: ArielModelProvider,
 ): Promise<FileCodeEditResult> {
   if (
     typeof filePath !== "string" ||
@@ -123,19 +146,15 @@ export async function runDeepSeekCodeEditFromFile(
     throw error;
   }
 
-  return runDeepSeekCodeEditTask(instruction, sourceText, apiKey);
+  return runConfiguredCodeEditTask(instruction, sourceText, provider);
 }
 
-export function runDeepSeekCodeEditTask(
+export function runConfiguredCodeEditTask(
   instruction: string,
   sourceText: string,
-  apiKey: string,
+  provider: ArielModelProvider,
 ): Promise<CodeEditProposalResult> {
-  const modelPort = createDeepSeekModelPort({
-    apiKey,
-    model: "deepseek-flash",
-    timeoutMs: CODE_EDIT_TIMEOUT_MS,
-  });
+  const modelPort = createConfiguredModelPort(provider);
   let safeMessage: string | undefined;
   // Observe only known adapter-generated failures; core receives the original
   // result and owns acceptance. Unknown messages and exceptions stay unchanged.
@@ -159,4 +178,27 @@ export function runDeepSeekCodeEditTask(
         ? { ...result, error: { ...result.error, message: safeMessage } }
         : result,
   );
+}
+
+// Existing public DeepSeek operations remain thin compatibility wrappers.
+export function runDeepSeekCodeEditFromFile(
+  filePath: string,
+  instruction: string,
+  apiKey: string,
+): Promise<FileCodeEditResult> {
+  return runConfiguredCodeEditFromFile(filePath, instruction, {
+    kind: "deepseek",
+    apiKey,
+  });
+}
+
+export function runDeepSeekCodeEditTask(
+  instruction: string,
+  sourceText: string,
+  apiKey: string,
+): Promise<CodeEditProposalResult> {
+  return runConfiguredCodeEditTask(instruction, sourceText, {
+    kind: "deepseek",
+    apiKey,
+  });
 }

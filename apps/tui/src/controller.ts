@@ -5,10 +5,12 @@ import {
   type ProjectFilesErrorKind,
   type ProjectFileSnapshot,
   type ProjectUndoRecord,
-  runDeepSeekCodeEditTask,
+  parseArielModelConfig,
+  runConfiguredCodeEditTask,
+  type ArielModelConfigResult,
 } from "@ariel/local-host";
 
-type ProposalResult = Awaited<ReturnType<typeof runDeepSeekCodeEditTask>>;
+type ProposalResult = Awaited<ReturnType<typeof runConfiguredCodeEditTask>>;
 type CodeEditProposal = Extract<
   ProposalResult,
   { status: "completed" }
@@ -57,11 +59,13 @@ export interface TuiState {
   readonly modal: TuiModal;
   readonly privacyConfirmed: boolean;
   readonly providerConfigured: boolean;
+  readonly providerName: "DeepSeek" | "OpenAI-compatible" | "Model provider";
 }
 
 export interface TuiControllerConfig {
   readonly initialProjectPath: string;
   readonly apiKey?: string;
+  readonly modelConfig?: ArielModelConfigResult;
   // Offline presentation/controller tests can substitute the model composition.
   readonly propose?: (
     instruction: string,
@@ -113,38 +117,52 @@ const TASK_MESSAGES = {
   "invalid-proposal": "模型返回的修改建议未通过 Ariel validation。",
 };
 
-function modelFailureMessage(message: string): string {
+function modelFailureMessage(
+  message: string,
+  providerName: TuiState["providerName"],
+): string {
   switch (message) {
-    case "DeepSeek code-edit request timed out.":
-      return "DeepSeek 请求超时（120 秒），请稍后再试。";
-    case "DeepSeek code-edit network request failed.":
-      return "DeepSeek 网络请求失败，请检查网络或代理配置。";
-    case "DeepSeek code-edit response body could not be read.":
-      return "DeepSeek 响应正文读取失败，请检查网络后再试。";
-    case "DeepSeek code-edit response was not valid JSON.":
-      return "DeepSeek 响应不是有效 JSON，当前无法处理该响应。";
-    case "DeepSeek code-edit response was unsupported.":
-      return "DeepSeek 响应格式不兼容，当前无法处理该响应。";
+    case `${providerName} code-edit request timed out.`:
+      return `${providerName} 请求超时（120 秒），请稍后再试。`;
+    case `${providerName} code-edit network request failed.`:
+      return `${providerName} 网络请求失败，请检查网络或代理配置。`;
+    case `${providerName} code-edit response body could not be read.`:
+      return `${providerName} 响应正文读取失败，请检查网络后再试。`;
+    case `${providerName} code-edit response was not valid JSON.`:
+      return `${providerName} 响应不是有效 JSON，当前无法处理该响应。`;
+    case `${providerName} code-edit response was unsupported.`:
+      return `${providerName} 响应格式不兼容，当前无法处理该响应。`;
   }
-  const match = /^DeepSeek code-edit request failed \(HTTP ([1-5][0-9]{2})\)\.$/.exec(message);
+  const match =
+    /^(DeepSeek|OpenAI-compatible) code-edit request failed \(HTTP ([1-5][0-9]{2})\)\.$/.exec(
+      message,
+    );
   // `$` may match before a final newline; equality keeps the allowlist exact.
-  const status = match?.[1];
-  if (match?.[0] !== message || status === undefined)
-    return TASK_MESSAGES["model-failure"];
+  const status = match?.[2];
+  if (
+    match?.[0] !== message ||
+    match?.[1] !== providerName ||
+    status === undefined
+  )
+    return `${providerName} 请求失败，请检查配置或稍后再试。`;
   switch (status) {
     case "401":
-      return "DeepSeek 认证失败（HTTP 401），请检查 DeepSeek 官方 API key。";
+      return providerName === "DeepSeek"
+        ? "DeepSeek 认证失败（HTTP 401），请检查 DeepSeek 官方 API key。"
+        : "OpenAI-compatible 认证失败（HTTP 401），请检查 endpoint 的 API key。";
     case "402":
-      return "DeepSeek 余额不足（HTTP 402），请检查账户余额。";
+      return providerName === "DeepSeek"
+        ? "DeepSeek 余额不足（HTTP 402），请检查账户余额。"
+        : "OpenAI-compatible 拒绝了请求（HTTP 402），请检查 endpoint 配置。";
     case "429":
-      return "DeepSeek 请求限流（HTTP 429），请稍后再试。";
+      return `${providerName} 请求限流（HTTP 429），请稍后再试。`;
     case "400":
     case "422":
-      return `DeepSeek 拒绝了请求（HTTP ${status}）。`;
+      return `${providerName} 拒绝了请求（HTTP ${status}）。`;
     default:
       return status.startsWith("5")
-        ? `DeepSeek 服务故障（HTTP ${status}），请稍后再试。`
-        : `DeepSeek 请求失败（HTTP ${status}），请检查服务配置。`;
+        ? `${providerName} 服务故障（HTTP ${status}），请稍后再试。`
+        : `${providerName} 请求失败（HTTP ${status}），请检查服务配置。`;
   }
 }
 
@@ -153,14 +171,37 @@ class TuiUserFailure extends Error {}
 export function createTuiController(
   config: TuiControllerConfig,
 ): TuiController {
-  const key = config.apiKey;
-  const providerConfigured = typeof key === "string" && key.trim().length > 0;
+  const modelConfig =
+    config.modelConfig ??
+    parseArielModelConfig(
+      config.apiKey === undefined ? {} : { DEEPSEEK_API_KEY: config.apiKey },
+    );
+  const providerConfigured = modelConfig.status === "configured";
+  const providerName: TuiState["providerName"] =
+    modelConfig.status === "failed"
+      ? modelConfig.providerName
+      : modelConfig.provider.kind === "deepseek"
+        ? "DeepSeek"
+        : "OpenAI-compatible";
+  const key =
+    modelConfig.status === "configured"
+      ? modelConfig.provider.apiKey
+      : config.apiKey;
   const containsCredential = (text: string): boolean =>
-    providerConfigured && key !== undefined && text.includes(key.trim());
+    typeof key === "string" &&
+    key.trim().length > 0 &&
+    text.includes(key.trim());
   const generate =
     config.propose ??
-    ((instruction: string, sourceText: string) =>
-      runDeepSeekCodeEditTask(instruction, sourceText, key ?? ""));
+    ((instruction: string, sourceText: string) => {
+      if (modelConfig.status !== "configured")
+        throw new Error("Model provider configuration unavailable.");
+      return runConfiguredCodeEditTask(
+        instruction,
+        sourceText,
+        modelConfig.provider,
+      );
+    });
   let project: ProjectFiles | undefined;
   let pending: TuiProposal | undefined;
   let undo: ProjectUndoRecord | undefined;
@@ -183,6 +224,7 @@ export function createTuiController(
     modal: null,
     privacyConfirmed: false,
     providerConfigured,
+    providerName,
   });
 
   function update(change: Partial<TuiState>): void {
@@ -377,10 +419,8 @@ export function createTuiController(
       failure("请输入包含非空白字符的修改要求。");
       return;
     }
-    if (!providerConfigured) {
-      failure(
-        "DeepSeek API key 未配置。请设置 DEEPSEEK_API_KEY 后重新启动 Ariel。",
-      );
+    if (modelConfig.status === "failed") {
+      failure(modelConfig.error.message);
       return;
     }
     if (!state.privacyConfirmed) {
@@ -410,7 +450,7 @@ export function createTuiController(
       if (result.status === "failed")
         throw new TuiUserFailure(
           result.error.kind === "model-failure"
-            ? modelFailureMessage(result.error.message)
+            ? modelFailureMessage(result.error.message, providerName)
             : TASK_MESSAGES[result.error.kind],
         );
       checkCredentialText(result.proposal.oldText);
@@ -475,7 +515,7 @@ export function createTuiController(
   return {
     getState: () => state,
     redactCredentialForDisplay(text) {
-      return providerConfigured && key !== undefined
+      return typeof key === "string" && key.trim().length > 0
         ? text.replaceAll(key.trim(), "[credential hidden]")
         : text;
     },

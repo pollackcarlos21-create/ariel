@@ -11,9 +11,18 @@ import {
 
 export {
   type FileCodeEditResult,
+  runConfiguredCodeEditTask,
+  runConfiguredCodeEditFromFile,
   runDeepSeekCodeEditTask,
   runDeepSeekCodeEditFromFile,
 } from "./code-edit-file";
+
+export {
+  type ArielModelProvider,
+  type ArielModelConfigResult,
+  createConfiguredModelPort,
+  parseArielModelConfig,
+} from "./model-config";
 
 export {
   openProjectFiles,

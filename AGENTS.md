@@ -18,7 +18,7 @@
 - Bun 可以用于开发、测试及宿主实现，不能进入 core 的公共契约。TUI 只负责 terminal presentation，不得直接 import core、providers 或 filesystem implementation；Ink/React state 不能替代 core application policy。
 - local-host 承担 composition root 与 filesystem 边界职责；CLI/TUI 保持薄前端；providers 负责显式 adapter 边界。不得为 terminal product 创建 HTTP server、local daemon 或 browser frontend。
 - TUI project 文件操作必须通过 selected project root 的 canonical containment 检查；Apply 必须明确触发并二次确认，Undo 必须检查 applied snapshot，拒绝 stale content；不得自动 apply 或扩展为 shell/Git execution。CLI edit 保持 proposal-only。
-- credential 只由 executable composition boundary 从启动环境读取并显式传给 host；provider 不读取 env，不在 TUI 输入或持久化 key，不写入 source、fixtures、Git 或 logs。第一次 Generate 前必须确认 selected source 会发送给 DeepSeek。
+- credential 只由 executable composition boundary 从启动环境读取并显式传给 host；provider 不读取 env，不在 TUI 输入或持久化 key，不写入 source、fixtures、Git 或 logs。第一次 Generate 前必须确认 selected source 会发送给 configured model provider。
 - TUI 必须进入 alternate screen，并在正常退出、Ctrl+C 和异常时恢复 terminal、cursor 与 input mode；NO_COLOR 禁用彩色。
 - 不得为了未来可能需求提前创建 speculative API；新增公共 API 必须服务当前已批准的真实需求。
 

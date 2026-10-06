@@ -4,6 +4,10 @@ export {
   createDeepSeekModelPort,
   type DeepSeekModelPortConfig,
 } from "./deepseek";
+export {
+  createOpenAICompatibleModelPort,
+  type OpenAICompatibleModelPortConfig,
+} from "./openai-compatible";
 
 export function createInMemoryModelPort(): ModelPort {
   return {

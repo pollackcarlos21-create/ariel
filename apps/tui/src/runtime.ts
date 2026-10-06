@@ -1,4 +1,5 @@
 import process from "node:process";
+import type { ArielModelConfigResult } from "@ariel/local-host";
 import { render } from "ink";
 import { Component, createElement, type ReactNode } from "react";
 import { App } from "./App";
@@ -7,6 +8,7 @@ import { createTuiController } from "./controller";
 export interface TuiLaunchOptions {
   readonly projectPath: string;
   readonly apiKey?: string;
+  readonly modelConfig?: ArielModelConfigResult;
   readonly noColor?: boolean;
 }
 
@@ -41,6 +43,9 @@ export async function launchTui(options: TuiLaunchOptions): Promise<number> {
   const controller = createTuiController({
     initialProjectPath: options.projectPath,
     ...(options.apiKey === undefined ? {} : { apiKey: options.apiKey }),
+    ...(options.modelConfig === undefined
+      ? {}
+      : { modelConfig: options.modelConfig }),
   });
   const originalRawMode = process.stdin.isRaw;
   let renderer: ReturnType<typeof render> | undefined;

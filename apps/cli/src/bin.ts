@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 import { runCli } from "./index";
+import { parseArielModelConfig } from "@ariel/local-host";
 
 try {
   const args = process.argv.slice(2);
-  const apiKey = args[0] === "edit" ? process.env.DEEPSEEK_API_KEY : undefined;
-  const result = await runCli(args, apiKey);
+  const config =
+    args[0] === "edit" ? parseArielModelConfig(process.env) : undefined;
+  const result = await runCli(args, config);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

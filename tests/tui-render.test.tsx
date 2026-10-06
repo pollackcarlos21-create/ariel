@@ -3,6 +3,10 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanup, render } from "ink-testing-library";
+import {
+  parseArielModelConfig,
+  type ArielModelConfigResult,
+} from "@ariel/local-host";
 import { App } from "../apps/tui/src/App";
 import {
   createTuiController,
@@ -28,6 +32,7 @@ async function fixture(
     readonly source?: string;
     readonly filename?: string;
     readonly failure?: "model-failure" | "invalid-proposal";
+    readonly modelConfig?: ArielModelConfigResult;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "ariel-tui-render-"));
@@ -39,14 +44,20 @@ async function fixture(
   const controller = createTuiController({
     initialProjectPath: root,
     ...(options.key === undefined ? {} : { apiKey: options.key }),
-    propose: async () => {
+    ...(options.modelConfig === undefined
+      ? {}
+      : { modelConfig: options.modelConfig }),
+    propose: async (_instruction, sourceText) => {
       calls += 1;
-      return options.failure === undefined
+      return options.failure === undefined || calls > 1
         ? {
             status: "completed",
             proposal: {
-              oldText: source,
-              newText: "async function loadData() {\n\treturn '源码';\n}\n",
+              oldText: sourceText,
+              newText: sourceText.replace(
+                "function loadData()",
+                "async function loadData()",
+              ),
             },
           }
         : {
@@ -98,6 +109,62 @@ describe("terminal TUI presentation and keyboard interaction", () => {
     expect(frame).toContain("example.ts");
     expect(frame).toContain("Ctrl+O");
     expect(frame).not.toContain("http://");
+  });
+
+  test("explicit DeepSeek config renders configured status", async () => {
+    const ui = await fixture({
+      modelConfig: parseArielModelConfig({
+        ARIEL_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: "offline-placeholder",
+      }),
+    });
+    expect(ui.view.lastFrame()).toContain("DEEPSEEK ● CONFIGURED");
+    expect(ui.controller.getState().providerName).toBe("DeepSeek");
+  });
+
+  test("compatible config without a key renders safe status, neutral privacy, and two tasks", async () => {
+    const ui = await fixture({
+      modelConfig: parseArielModelConfig({
+        ARIEL_PROVIDER: "openai-compatible",
+        OPENAI_COMPATIBLE_BASE_URL: "http://localhost:8000/v1",
+        OPENAI_COMPATIBLE_MODEL: "offline-qwen",
+      }),
+    });
+    expect(ui.view.lastFrame()).toContain("OPENAI-COMPAT ● CONFIGURED");
+    expect(ui.view.lastFrame()).not.toContain("localhost");
+    await ui.press("\r");
+    await ui.press("first task");
+    await ui.press("\r");
+    expect(ui.view.lastFrame()).toContain("configured model provider");
+    expect(ui.view.lastFrame()).toContain("Provider: OpenAI-compatible");
+    expect(ui.view.lastFrame()).not.toContain("sent to DeepSeek");
+    expect(ui.calls()).toBe(0);
+    await ui.press("\r");
+    expect(ui.calls()).toBe(1);
+    await ui.press("r");
+    await ui.press("g");
+    await ui.press(`${"\x7f".repeat("first task".length)}second task`);
+    expect(ui.controller.getState().instruction).toBe("second task");
+    await ui.press("\r");
+    expect(ui.calls()).toBe(2);
+    expect(ui.controller.getState().status).toBe("proposal-ready");
+  });
+
+  test("compatible missing configuration is safe and does not call the model", async () => {
+    const ui = await fixture({
+      modelConfig: parseArielModelConfig({
+        ARIEL_PROVIDER: "openai-compatible",
+      }),
+    });
+    expect(ui.controller.getState().providerConfigured).toBe(false);
+    expect(ui.view.lastFrame()).toContain("OPENAI-COMPAT");
+    await ui.press("\r");
+    await ui.press("first task");
+    await ui.press("\r");
+    expect(ui.view.lastFrame()).toContain("ARIEL ERROR");
+    expect(ui.view.lastFrame()).toContain("OPENAI_COMPATIBLE_BASE_URL");
+    expect(ui.view.lastFrame()).not.toContain("DEEPSEEK_API_KEY");
+    expect(ui.calls()).toBe(0);
   });
 
   test("Enter opens exact source with line numbers, Unicode and visible tabs", async () => {
@@ -204,6 +271,71 @@ describe("terminal TUI presentation and keyboard interaction", () => {
     expect(ui.controller.getState().focus).toBe("code");
     await ui.press("g");
     expect(ui.controller.getState().focus).toBe("task");
+  });
+
+  test("first Generate then Reject allows clearing and entering a second task in one terminal chunk", async () => {
+    const ui = await fixture({ key: "offline-placeholder" });
+    await ui.press("\r");
+    await ui.press("first task");
+    await ui.press("\r");
+    await ui.press("\r");
+    expect(ui.calls()).toBe(1);
+    await ui.press("r");
+    await ui.press("g");
+    await ui.press(`${"\x7f".repeat("first task".length)}second task`);
+    expect(ui.controller.getState().instruction).toBe("second task");
+    await ui.press("\r");
+    expect(ui.calls()).toBe(2);
+    expect(ui.controller.getState().status).toBe("proposal-ready");
+    expect(ui.controller.getState().busy).toBe(false);
+  });
+
+  for (const failure of ["model-failure", "invalid-proposal"] as const) {
+    test(`${failure} closes and permits a second task and Generate`, async () => {
+      const ui = await fixture({ key: "offline-placeholder", failure });
+      await ui.press("\r");
+      await ui.press("first task");
+      await ui.press("\r");
+      await ui.press("\r");
+      expect(ui.controller.getState().modal).toBe("error");
+      expect(ui.controller.getState().busy).toBe(false);
+      await ui.press("\r");
+      await ui.press(`${"\x7f".repeat("first task".length)}second task`);
+      expect(ui.controller.getState().instruction).toBe("second task");
+      await ui.press("\r");
+      expect(ui.calls()).toBe(2);
+      expect(ui.controller.getState().status).toBe("proposal-ready");
+      expect(ui.controller.getState().modal).toBeNull();
+    });
+  }
+
+  test("Apply, second Generate, Undo and Help/Esc retain editable task input", async () => {
+    const ui = await fixture({ key: "offline-placeholder" });
+    await ui.press("\r");
+    await ui.press("first task");
+    await ui.press("\r");
+    await ui.press("\r");
+    await ui.press("a");
+    await ui.press("\r");
+    expect(ui.controller.getState().status).toBe("applied");
+    await ui.press("g");
+    await ui.press(`${"\x7f".repeat("first task".length)}second task`);
+    expect(ui.controller.getState().instruction).toBe("second task");
+    await ui.press("\r");
+    expect(ui.calls()).toBe(2);
+    expect(ui.controller.getState().status).toBe("proposal-ready");
+    await ui.press("r");
+    await ui.press("u");
+    expect(ui.controller.getState().status).toBe("undo-complete");
+    expect(await readFile(join(ui.root, "example.ts"), "utf8")).toBe(ui.source);
+    await ui.press("?");
+    expect(ui.controller.getState().modal).toBe("help");
+    await ui.press("\x1b");
+    expect(ui.controller.getState().modal).toBeNull();
+    await ui.press("g");
+    await ui.press("after undo and help");
+    expect(ui.controller.getState().instruction).toBe("after undo and help");
+    expect(ui.controller.getState().busy).toBe(false);
   });
 
   test("Ctrl+O opens project input; Esc cancels without changing project", async () => {

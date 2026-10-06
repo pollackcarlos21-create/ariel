@@ -1,6 +1,7 @@
 import { Box, Text as InkText, useInput, usePaste, useWindowSize } from "ink";
 import {
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ComponentProps,
@@ -91,7 +92,13 @@ export function App({
   const theme = useMemo(() => createTheme(noColor), [noColor]);
   const [projectInput, setProjectInput] = useState("");
   const [scroll, setScroll] = useState(0);
-  const [taskCursor, setTaskCursor] = useState(0);
+  const [taskCursor, renderTaskCursor] = useState(0);
+  const taskCursorRef = useRef(0);
+
+  function setTaskCursor(position: number): void {
+    taskCursorRef.current = position;
+    renderTaskCursor(position);
+  }
   const [command, setCommand] = useState<string | null>(null);
   const narrow = columns < 90;
   const bodyHeight = Math.max(4, rows - 11);
@@ -153,7 +160,8 @@ export function App({
   }
 
   function insertInstruction(input: string): void {
-    const position = Math.min(taskCursor, state.instruction.length);
+    const state = controller.getState();
+    const position = Math.min(taskCursorRef.current, state.instruction.length);
     controller.setInstruction(
       state.instruction.slice(0, position) +
         input +
@@ -163,6 +171,7 @@ export function App({
   }
 
   usePaste((input) => {
+    const state = controller.getState();
     if (state.busy) return;
     if (state.modal === "open-project")
       setProjectInput((previous) => previous + input);
@@ -171,6 +180,9 @@ export function App({
   });
 
   useInput((input, key) => {
+    // Ink may dispatch several events synchronously from one stdin chunk.
+    // React render snapshots do not advance between those events.
+    const state = controller.getState();
     if (key.ctrl && input === "c") {
       onQuit();
       return;
@@ -200,7 +212,7 @@ export function App({
         if (key.ctrl && input === "u") setProjectInput("");
         else if (key.return) run(controller.openProject(projectInput));
         else if (key.backspace || key.delete)
-          setProjectInput(removeLastCharacter(projectInput));
+          setProjectInput(removeLastCharacter);
         else if (!key.ctrl && !key.meta)
           setProjectInput((previous) => previous + input);
       } else if (key.return) {
@@ -224,7 +236,10 @@ export function App({
       return;
     }
     if (state.focus === "task") {
-      const position = Math.min(taskCursor, state.instruction.length);
+      const position = Math.min(
+        taskCursorRef.current,
+        state.instruction.length,
+      );
       if (key.ctrl && input === "j") insertInstruction("\n");
       else if (key.return && key.shift) insertInstruction("\n");
       else if (key.return) {
@@ -375,8 +390,10 @@ export function App({
               PRIVACY CONFIRMATION
             </Text>
             <Text>
-              Selected source code and instruction will be sent to DeepSeek.
+              Selected source code and instruction will be sent to the
+              configured model provider.
             </Text>
+            <Text>Provider: {state.providerName}</Text>
             <Text>Confirmed once per Ariel process. No automatic apply.</Text>
             <Text>[Enter] Continue [Esc] Cancel</Text>
           </>
@@ -405,7 +422,8 @@ export function App({
             </Text>
             {!state.providerConfigured ? (
               <Text>
-                {'Set export DEEPSEEK_API_KEY="..." then restart Ariel.'}
+                Check model provider environment configuration, then restart
+                Ariel.
               </Text>
             ) : null}
             <Text>[Enter / Esc] Close</Text>
@@ -438,9 +456,12 @@ export function App({
             wrap="truncate-end"
             color={state.providerConfigured ? theme.success : theme.warning}
           >
-            {state.providerConfigured
-              ? "DEEPSEEK ● CONFIGURED"
-              : "DEEPSEEK ○ NOT CONFIGURED"}
+            {state.providerName === "DeepSeek"
+              ? "DEEPSEEK"
+              : state.providerName === "OpenAI-compatible"
+                ? "OPENAI-COMPAT"
+                : "MODEL"}{" "}
+            {state.providerConfigured ? "● CONFIGURED" : "○ NOT CONFIGURED"}
           </Text>
         </Box>
       </Box>

@@ -31,7 +31,16 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
 }
 
 async function fixture(
-  mode: "normal" | "render-error" | "apply" | "undo" | "write-error",
+  mode:
+    | "normal"
+    | "render-error"
+    | "apply"
+    | "undo"
+    | "write-error"
+    | "interaction"
+    | "compatible"
+    | "provider-failure"
+    | "invalid-proposal",
 ) {
   const directory = await mkdtemp(join(tmpdir(), "ariel-tui-lifecycle-"));
   paths.push(directory);
@@ -40,6 +49,11 @@ async function fixture(
   const release = join(directory, "release-write");
   const preload = join(directory, "preload.ts");
   const writes = mode === "apply" || mode === "undo" || mode === "write-error";
+  const interaction =
+    mode === "interaction" ||
+    mode === "compatible" ||
+    mode === "provider-failure" ||
+    mode === "invalid-proposal";
   const script = `
 import { mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -53,12 +67,17 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url.startsWith("data:") || url.startsWith("file:")) return originalFetch(input, init);
-  if (url !== "https://api.deepseek.com/chat/completions") throw new Error("Unexpected network in offline PTY fixture");
+  if (url !== ${JSON.stringify(mode === "compatible" ? "https://offline.example/v1/chat/completions" : "https://api.deepseek.com/chat/completions")}) throw new Error("Unexpected network in offline PTY fixture");
   fetchCalls += 1;
   process.stdout.write("FIXTURE_FETCH_CALLS=" + fetchCalls + "\\n");
+  const request = JSON.parse(init.body);
+  const task = JSON.parse(request.messages.at(-1).content);
+  process.stdout.write("FIXTURE_INSTRUCTION=" + task.instruction + "\\n");
+  ${mode === "provider-failure" ? 'if (fetchCalls === 1) return new Response("private provider body", {status:401});' : ""}
+  const answer = ${mode === "invalid-proposal" ? 'fetchCalls === 1 ? {oldText:"missing anchor",newText:"invalid"} :' : ""} {oldText: task.sourceText,newText: task.sourceText.replace("function loadData()", "async function loadData()")};
   return new Response(JSON.stringify({
     id:"offline-fixture",object:"chat.completion",created:0,model:"offline-fixture-model",system_fingerprint:"offline-fixture",
-    choices:[{index:0,logprobs:null,finish_reason:"stop",message:{role:"assistant",content:JSON.stringify({oldText:${JSON.stringify(SOURCE)},newText:${JSON.stringify(AFTER)}})}}]
+    choices:[{index:0,logprobs:null,finish_reason:"stop",message:{role:"assistant",content:JSON.stringify(answer)}}]
   }));
 };
 ${mode === "render-error" ? `mock.module(${JSON.stringify(appModule)}, () => ({ App() { throw new Error("FAKE_PRIVATE_RENDER_STACK_BODY"); } }));` : ""}
@@ -106,9 +125,15 @@ spyOn(fs, "rename").mockImplementation(async (from, to) => {
       env: {
         TERM: "xterm-256color",
         NO_COLOR: "1",
-        ...(writes
-          ? { DEEPSEEK_API_KEY: "offline-lifecycle-placeholder" }
-          : {}),
+        ...(mode === "compatible"
+          ? {
+              ARIEL_PROVIDER: "openai-compatible",
+              OPENAI_COMPATIBLE_BASE_URL: "https://offline.example/v1",
+              OPENAI_COMPATIBLE_MODEL: "offline-qwen",
+            }
+          : writes || interaction
+            ? { DEEPSEEK_API_KEY: "offline-lifecycle-placeholder" }
+            : {}),
       },
       terminal,
     },
@@ -195,6 +220,90 @@ describe("real PTY terminal lifecycle", () => {
       expect(await ui.exit()).toBe(0);
       expectRestoration(ui.output());
       expect(ui.contains("FIXTURE_FETCH_CALLS=")).toBe(false);
+    },
+    30_000,
+  );
+
+  test.each([
+    "interaction",
+    "compatible",
+    "provider-failure",
+    "invalid-proposal",
+  ] as const)(
+    "%s returns to editable task input and completes a second Generate in a real PTY",
+    async (mode) => {
+      const ui = await fixture(mode);
+      await ui.wait("source.ts");
+      ui.terminal.write("\r");
+      await ui.wait("function loadData()");
+      ui.terminal.write("first task");
+      await ui.wait("first task");
+      ui.terminal.write("\r");
+      await ui.wait("PRIVACY CONFIRMATION");
+      if (mode === "compatible") {
+        expect(ui.contains("OPENAI-COMPAT ● CONFIGURED")).toBe(true);
+        expect(ui.contains("configured model provider")).toBe(true);
+        expect(ui.contains("Provider: OpenAI-compatible")).toBe(true);
+        expect(ui.contains("sent to DeepSeek")).toBe(false);
+      }
+      ui.terminal.write("\r");
+      await ui.wait("FIXTURE_FETCH_CALLS=1");
+      if (mode === "interaction" || mode === "compatible") {
+        await ui.wait("PROPOSAL VALIDATED");
+        ui.terminal.write("r");
+        await Bun.sleep(60);
+        ui.terminal.write("g");
+        await Bun.sleep(60);
+      } else {
+        await ui.wait("ARIEL ERROR");
+        ui.terminal.write("\r");
+        await Bun.sleep(60);
+      }
+      // A held Backspace commonly arrives as one buffered stdin chunk.
+      ui.terminal.write(`${"\x7f".repeat("first task".length)}second task`);
+      await Bun.sleep(60);
+      ui.terminal.write("\r");
+      await ui.wait("FIXTURE_INSTRUCTION=second task");
+      await ui.wait("FIXTURE_FETCH_CALLS=2");
+      await ui.wait("PROPOSAL VALIDATED");
+      expect(ui.contains("FIXTURE_FETCH_CALLS=3")).toBe(false);
+      expect(await readFile(join(ui.project, "source.ts"), "utf8")).toBe(
+        SOURCE,
+      );
+      if (mode === "interaction") {
+        ui.terminal.write("a");
+        await ui.wait("APPLY THIS EDIT?");
+        ui.terminal.write("\r");
+        await ui.wait("◆ APPLIED");
+        expect(await readFile(join(ui.project, "source.ts"), "utf8")).toBe(
+          AFTER,
+        );
+        ui.terminal.write("g");
+        await Bun.sleep(60);
+        ui.terminal.write(`${"\x7f".repeat("second task".length)}after Apply`);
+        await ui.wait("after Apply");
+        ui.terminal.write("\x1b");
+        await Bun.sleep(60);
+        ui.terminal.write("u");
+        await ui.wait("UNDO COMPLETE");
+        expect(await readFile(join(ui.project, "source.ts"), "utf8")).toBe(
+          SOURCE,
+        );
+      } else {
+        ui.terminal.write("r");
+        await Bun.sleep(60);
+      }
+      ui.terminal.write("?");
+      await ui.wait("Ariel Keyboard Reference");
+      ui.terminal.write("\x1b");
+      await Bun.sleep(60);
+      ui.terminal.write("g");
+      await Bun.sleep(60);
+      ui.terminal.write("after Help and Esc");
+      await ui.wait("after Help and Esc");
+      ui.terminal.write("\x03");
+      expect(await ui.exit()).toBe(0);
+      expectRestoration(ui.output());
     },
     30_000,
   );

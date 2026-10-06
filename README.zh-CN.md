@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-Ariel 是一个从第一性原理构建 autonomous coding agent 的开源项目。v0.2 提供 terminal-native interactive coding interface：打开项目、浏览源码、用自然语言生成单文件修改建议、审阅 Before/After，再明确 Apply 或 Reject；Apply 后可在当前进程中 Undo。
+Ariel 是一个从第一性原理构建 autonomous coding agent 的开源项目。v0.2.1 提供 terminal-native interactive coding interface：打开项目、浏览源码、用自然语言生成单文件修改建议、审阅 Before/After，再明确 Apply 或 Reject；Apply 后可在当前进程中 Undo。模型默认使用 DeepSeek，也可以显式配置 OpenAI-compatible Chat Completions endpoint。
 
 CLI `ariel edit` 保持 proposal-only，不修改文件。TUI 只有在用户明确确认 Apply 或触发 Undo 后才写文件，没有自动 apply、shell execution 或自主 repository modification。
 
@@ -18,13 +18,30 @@ bun install --frozen-lockfile
 
 ## Configure
 
-配置自己的 DeepSeek API key。以下是 placeholder，不能作为真实 credential 使用：
+未设置 `ARIEL_PROVIDER` 时继续默认使用 DeepSeek。配置自己的 API key；以下是 placeholder，不能作为真实 credential 使用：
 
 ```sh
 export DEEPSEEK_API_KEY="your-own-deepseek-api-key"
 ```
 
-不要将真实 key 写入 Git、源码、fixture 或日志。Ariel 只使用启动进程的环境变量，不自动读取 `.env`，不提供 `--api-key` 参数或持久化 credential。CLI edit 遇到缺失、空字符串或 whitespace-only key 时返回配置错误、退出 1。TUI 仍可启动和浏览文件；Generate 会提示配置 key 后重启，不进行真实请求。
+也可以用 `export ARIEL_PROVIDER="deepseek"` 显式选择同一路径；该路径使用 `deepseek-flash`，thinking disabled。
+
+使用 OpenAI-compatible provider 时，显式提供 API base URL 与真实 model identifier：
+
+```sh
+export ARIEL_PROVIDER="openai-compatible"
+export OPENAI_COMPATIBLE_BASE_URL="https://api.example.com/v1"
+export OPENAI_COMPATIBLE_MODEL="example-model"
+export OPENAI_COMPATIBLE_API_KEY="your-own-compatible-api-key"
+
+bun run ariel
+```
+
+以上 endpoint、model 与 key 都是 placeholder，需要替换为供应商提供的值。对于不要求认证的 compatible endpoint，API key 可省略：不设置或 unset `OPENAI_COMPATIBLE_API_KEY`。该 key 缺失、为空或只有 whitespace 时，不发送 `Authorization` header。
+
+`OPENAI_COMPATIBLE_BASE_URL` 必须包含供应商要求的 API prefix。例如 `https://api.example.com/v1` 最终请求 `https://api.example.com/v1/chat/completions`。尾部 `/` 会被移除；不自动猜 `/v1`、删除用户 path 或尝试其他 endpoint。默认要求 HTTPS；仅 `localhost`、`127.0.0.1`、`[::1]` 允许本地 HTTP。拒绝 embedded URL credentials、query 或 fragment。Ariel 不验证任意 provider 是否完全 OpenAI-compatible；endpoint 必须支持非流式、纯文本 Chat Completions response。
+
+不要将真实 key 写入 Git、源码、fixture 或日志。Ariel 只使用启动进程的环境变量，不自动读取 `.env`，不提供 `--api-key` 参数或持久化 credential。未知 provider 和缺失/非法配置安全失败，不 silently fallback；CLI edit 退出 1。TUI 仍可启动和浏览文件，Generate 显示配置错误且零次网络请求。切换 provider 时修改启动环境并重启 Ariel。
 
 ## Ariel Interactive TUI
 
@@ -63,7 +80,7 @@ bun run ariel /path/to/project
 
 1. 默认 project 是 cwd；按 Ctrl+O 输入另一个本地 project directory。
 2. 在 file tree 用方向键导航、展开/折叠，Enter 打开 UTF-8 source file。目录按需 lazy loading，忽略 `.git`、`node_modules`、`dist`、`build`、`coverage`、`.cache` 等生成目录。
-3. 按 G 聚焦 task input，输入 instruction，Enter 生成建议。第一次 Generate 前确认 selected source 会发送 DeepSeek；每进程只确认一次。
+3. 按 G 聚焦 task input，输入 instruction，Enter 生成建议。第一次 Generate 前确认 selected source 会发送 configured model provider；确认框显示 provider 名，每进程只确认一次。
 4. 审阅 Before/After 与 `PROPOSAL VALIDATED`。按 R Reject 返回源码，不改变文件。
 5. 按 A 打开 Apply 确认框，Enter 确认才写文件；Esc 取消。文件自 Generate 后已改变时拒绝 stale proposal，需要重新 Generate。
 6. 按 U Undo；如果文件之后已被外部修改，拒绝覆盖新内容。
@@ -81,9 +98,9 @@ bun run ariel /path/to/project
 
 Task input 用 Ctrl+J 输入换行，Enter Generate；不依赖 terminal 的 Shift+Enter 编码。Task input 中的文字按原样解释；letter shortcuts 在相应 navigation focus 使用，输入文字时不把字母当作 Apply/Reject。界面始终显示 contextual shortcuts。
 
-选中的完整源码与 instruction 会发送给 DeepSeek；只选择愿意向 provider 分享的文本。Key 仅由 executable composition boundary 从启动环境读取，不在 TUI 输入或保存，不写入文件或日志。状态栏仅显示 DeepSeek 是否 configured，model 固定 `deepseek-flash`，host timeout 为 `120 sec`。
+选中的完整源码与 instruction 会发送到 configured endpoint；只选择愿意向该 provider 分享的文本。配置仅由 executable composition boundary 从启动环境读取，不在 TUI 输入或保存 key，不写入文件或日志。Header 显示 `DEEPSEEK` 或 `OPENAI-COMPAT` 与本地配置状态，不显示 credential。DeepSeek 使用 `deepseek-flash`；compatible 路径使用 `OPENAI_COMPATIBLE_MODEL`。两个 code-edit workflow 都采用显式 host timeout `120 sec`。
 
-`CONFIGURED` 仅表示已提供非空 key，不验证认证、账户余额或网络连接。失败时 TUI 显示安全的 HTTP status 或固定的网络、超时、响应格式提示，不显示 provider response body，不自动重试。
+`CONFIGURED` 仅表示本地配置有效，不验证认证、账户余额、网络连接或 provider compatibility。失败时 TUI 显示安全的 HTTP status 或固定的网络、超时、响应格式提示，不显示 provider response body，不自动重试。Enter 或 Esc 关闭错误后可以输入下一条 task；审阅 proposal 后按 R Reject，再按 G 输入下一条。Apply、Undo 和关闭 Help 后也可继续操作。
 
 每次任务独立、一次 model attempt，无 retry/repair/fallback。Proposal/Undo 只在当前 TUI process 保留，退出或切换 project 不保存聊天或撤销历史。Code viewer 只读，显示 line numbers，按窗口大小裁剪与滚动文本；viewer 将 tab 显示为四空格，原始 sourceText 与真实写入不因此改写。
 
@@ -107,7 +124,7 @@ bun run ariel edit packages/core/src/index.ts "为 getApplicationStatus 添加�
 
 `edit` 恰好接收两个 positional args：file 与 instruction。支持 absolute path；relative path 按当前 process cwd 解释。输入必须是非空、有效 UTF-8 的 regular file；whitespace-only 文本合法。Ariel 只读取该文件，不搜索 repository、不递归、不运行用户代码或 tests。
 
-此命令使用 `deepseek-flash`、thinking disabled、non-streaming；v0.1 local-host 显式传入 `120000ms` 的 total HTTP timeout。没有自动 retry、repair 或 fallback。指定文件的全部文本与 instruction 会发送给 DeepSeek；只选择自己愿意向该 provider 提供的文本。
+此命令与 TUI 使用同一启动 `ARIEL_PROVIDER` 配置。未选择 provider 时继续使用 `deepseek-flash`、thinking disabled；选择 `openai-compatible` 时使用配置的 endpoint/model。两条路径均 non-streaming；local-host 显式传入 `120000ms` 的 total HTTP timeout，provider 自身没有隐藏默认 timeout。没有自动 retry、repair 或 fallback。指定文件的全部文本与 instruction 会发送到 configured endpoint。
 
 成功时退出 0，显示类似以下的 patch-like preview：
 
@@ -149,7 +166,7 @@ bun run ariel model-demo "hello"
 
 ## 架构与开发
 
-core 的 `proposeCodeEdit(task, modelPort)` 拥有 task policy 和 proposal acceptance；local-host 负责文件/root sandbox、DeepSeek composition 和显式 Apply/Undo；CLI/TUI 负责 presentation；providers 负责 wire mapping。core 不知道 path、filesystem、env、credential、terminal 或 DeepSeek。`getApplicationStatus()` 保持 `{ agentExecution: "single-source-code-edit-proposal" }`。
+core 的 `proposeCodeEdit(task, modelPort)` 拥有 task policy 和 proposal acceptance；local-host 负责文件/root sandbox、configured provider composition 和显式 Apply/Undo；CLI/TUI 负责 presentation；providers 负责 wire mapping。core 不知道 path、filesystem、env、credential、terminal 或具体 provider。`getApplicationStatus()` 保持 `{ agentExecution: "single-source-code-edit-proposal" }`。
 
 当前没有自动文件修改、多文件自主任务、autonomous repository exploration、shell execution、自动运行 tests/Git、Tool、AgentRuntime、Session、streaming、retry/fallback、MCP/LSP、IDE、remote server、accounts、cloud sync、telemetry 或 desktop wrapper。
 

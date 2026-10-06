@@ -1,6 +1,8 @@
 import { type CodeEditProposal, getApplicationStatus } from "@ariel/core";
 import {
-  runDeepSeekCodeEditFromFile,
+  type ArielModelConfigResult,
+  parseArielModelConfig,
+  runConfiguredCodeEditFromFile,
   runInMemoryModelDemo,
 } from "@ariel/local-host";
 import { version } from "../package.json";
@@ -21,7 +23,7 @@ Usage: ariel [project-path]  进入交互式 TUI（需要 TTY）
 
 Commands:
   model-demo <text>  运行 in-memory 模拟演示（未调用真实模型）
-  edit <file> "<instruction>"  用 DeepSeek 生成一处修改建议，不修改文件
+  edit <file> "<instruction>"  用配置的模型 provider 生成一处修改建议，不修改文件（默认 DeepSeek）
 
 Options:
   --help     显示帮助信息
@@ -39,10 +41,12 @@ function terminalText(text: string): string {
 function renderProposal(
   filePath: string,
   proposal: CodeEditProposal,
-  apiKey: string,
+  apiKey?: string,
 ): string {
   let redacted = false;
   const display = (text: string): string => {
+    if (apiKey === undefined || apiKey.trim().length === 0)
+      return terminalText(text);
     let hidden = text.replaceAll(apiKey, "");
     const credential = apiKey.trim();
     while (hidden.includes(credential)) {
@@ -73,7 +77,7 @@ function renderProposal(
 
 export async function runCli(
   args: readonly string[],
-  apiKey?: string,
+  modelConfig?: ArielModelConfigResult | string,
 ): Promise<CliResult> {
   if (args[0] === "edit") {
     const filePath = args[1];
@@ -90,30 +94,41 @@ export async function runCli(
           '错误：edit 需要且只接受 file 和 instruction 两个参数。\nUsage: ariel edit <file> "<instruction>"\n',
       };
     }
-    if (apiKey === undefined || apiKey.trim().length === 0) {
+    const config =
+      typeof modelConfig === "object"
+        ? modelConfig
+        : parseArielModelConfig({ DEEPSEEK_API_KEY: modelConfig });
+    if (config.status === "failed") {
       return {
         exitCode: 1,
         stdout: "",
-        stderr: "错误：请先配置非空的 DEEPSEEK_API_KEY 环境变量。\n",
+        stderr: `错误：${config.error.message}\n`,
       };
     }
 
-    const result = await runDeepSeekCodeEditFromFile(
+    const result = await runConfiguredCodeEditFromFile(
       filePath,
       instruction,
-      apiKey,
+      config.provider,
     );
     if (result.status === "completed") {
       return {
         exitCode: 0,
-        stdout: renderProposal(filePath, result.proposal, apiKey),
+        stdout: renderProposal(
+          filePath,
+          result.proposal,
+          config.provider.apiKey,
+        ),
         stderr: "",
       };
     }
     const errors = {
       "file-read-failure": "无法读取源码文件，请检查路径和文件读取权限。",
       "invalid-task": "修改要求必须包含非空白字符，源码文件必须非空。",
-      "model-failure": "DeepSeek 模型请求失败，请检查配置或稍后重试。",
+      "model-failure":
+        config.provider.kind === "deepseek"
+          ? "DeepSeek 模型请求失败，请检查配置或稍后重试。"
+          : "OpenAI-compatible 模型请求失败，请检查配置或稍后重试。",
       "invalid-proposal": "模型返回的修改建议未通过 Ariel validation。",
     };
     return {

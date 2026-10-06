@@ -161,6 +161,22 @@
 
 状态与验收 evidence 以本地实现报告和 Chief Architect final review 为准，不以开发完成自动宣称 v0.2 closed。
 
+## v0.2.1 — Stabilization + OpenAI-Compatible Provider
+
+范围：修复已知 TypeScript tuple inference 与 TUI 连续输入问题，在现有 ModelPort 下新增 raw-fetch OpenAI-compatible Chat Completions adapter；不重写架构，不创建 Agent Runtime。
+
+实现与验收目标：
+
+- tests/code-edit-file.test.ts 的 tuple/Array inference 使用类型正确的最小修复，保持 strict，不用 any、忽略注释或双重断言掩盖问题。
+- TUI input handler 从 controller 读取最新 state、同步维护 cursor，避免旧 React snapshot 使连续 Backspace/input、busy/modal/focus 判断失效。离线 keyboard 与真实 PTY 验证 Generate → Reject → 下一任务，以及 provider failure、invalid proposal、Apply、Undo、Help 之后仍可操作。
+- providers 公共入口增加 createOpenAICompatibleModelPort 与 config：显式 baseUrl/model/timeoutMs、可选 apiKey；POST {baseUrl}/chat/completions，保留 API prefix，不猜 endpoint，不依赖 SDK。
+- URL 仅允许 HTTPS 或 localhost/127.0.0.1/[::1] HTTP，拒绝远程 HTTP、非法 scheme、embedded credentials、query/fragment。原样 model/system/user、stream:false、无隐藏 prompt/tools/JSON mode、无 retry/fallback，独立完整 deadline 与 redirect:error。
+- 从 unknown 验证最小 text response；非文本、tool/function output、不完整 finish_reason 和预期 HTTP/network/body/JSON/schema failure 安全返回 provider-failure；未知错误继续传播，不泄露 key、raw body、源码或 instruction。
+- 新增 Accepted [ADR-012](decisions/ADR-012-configured-model-provider-composition.md)：有限 provider union 与 pure config parser 属于 host/composition；executable 显式读取 env，core/ModelPort 不知道 provider，不增加 Registry、Runtime、DI 或 plugin loading。
+- ARIEL_PROVIDER 缺省仍 DeepSeek，显式 deepseek 保留 DEEPSEEK_API_KEY；openai-compatible 使用 required OPENAI_COMPATIBLE_BASE_URL/MODEL 与 optional API_KEY。未知 provider 安全失败，不 silently fallback；model-demo 保持 in-memory。
+- CLI edit 与 TUI 使用同一 composition，保留 explicit 120000ms host timeout；TUI header/首次 Generate privacy 随 configured provider 更新，没有 model picker、key persistence 或 provider-specific function proliferation。
+- 更新英文主 README 与中文 README；普通 CI 只跑 fake transport/temp-project tests，保留 DeepSeek fixed model/thinking/deadline/error regression。Compatible live smoke 仅在配置可用且本轮授权下最多一次；真实 smoke、本地验证和远程 CI evidence 分别报告，不据实现宣称 closure。
+
 ## 后续版本 — future / deferred
 
 自动 apply、多文件自主修改、autonomous repository exploration、shell/tests/Git execution、Tool/loop、runtime/executor、Session/conversation persistence、streaming、retry/fallback、routing/registry、memory、MCP、LSP、browser GUI、HTTP server/daemon、IDE、remote execution、accounts/cloud sync/telemetry、Electron/Tauri、collaboration 与 npm publishing 均未批准。不提前设计这些能力的 API。
